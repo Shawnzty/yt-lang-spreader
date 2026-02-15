@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "yt-lang-spreader"
+version = "0.1.0"
+description = "YouTube video summarizer, translator, and narrator with video generation"
+requires-python = ">=3.9"
+dependencies = [
+    "yt-dlp>=2024.1.0",
+    "openai>=1.0.0",
+    "gtts>=2.5.0",
+    "moviepy>=1.0.3",
+    "Pillow>=10.0.0",
+]
+
+[project.scripts]
+yt-lang-spreader = "yt_lang_spreader.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
