@@ -47,9 +47,12 @@ def run_pipeline(config: PipelineConfig) -> str:
             config.url,
             os.path.join(tmp_dir, "video"),
             source_lang=config.source_lang,
+            openai_api_key=config.openai_api_key,
         )
         print(f"      Title: {video_info.title}")
         print(f"      Duration: {format_timestamp(video_info.duration)}")
+        print(f"      Transcript source: {video_info.transcript_source}")
+        print(f"      Transcript language: {video_info.transcript_language}")
         print(f"      Subtitle segments: {len(video_info.subtitles)}")
 
         # Step 2: Segment the transcript

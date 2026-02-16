@@ -21,7 +21,7 @@ YouTube URL
 
 - Python 3.9+
 - [ffmpeg](https://ffmpeg.org/) installed and on PATH
-- An [OpenAI API key](https://platform.openai.com/api-keys) (for summarization and translation)
+- An [OpenAI API key](https://platform.openai.com/api-keys) (for summarization, translation, and fallback transcription when no captions are available)
 - (Optional) [ElevenLabs API key](https://elevenlabs.io/) for voice cloning
 
 ## Installation
@@ -48,6 +48,15 @@ export OPENAI_API_KEY="sk-..."
 # Basic: summarize + translate to Chinese
 yt-lang-spreader https://youtu.be/VIDEO_ID --lang zh
 ```
+
+You can also put API keys in a local `.env` file (auto-loaded):
+```bash
+OPENAI_API_KEY="sk-..."
+ELEVENLABS_API_KEY="..."
+```
+
+If YouTube subtitles are unavailable, the tool automatically transcribes audio and
+keeps the transcript in the video's original spoken language before translation.
 
 ## Using Your Own Voice
 
@@ -116,7 +125,7 @@ yt-lang-spreader https://youtu.be/VIDEO_ID --lang zh --no-subtitle-files
 | `url` | YouTube video URL (required) |
 | **Language** | |
 | `--lang, -l` | Target language code (default: zh) |
-| `--source-lang` | Source subtitle language (default: en) |
+| `--source-lang` | Source subtitle language (default: auto, prefers original video language) |
 | **Summarization** | |
 | `--compression, -c` | Compression level 1-5 (default: 3) |
 | **Segmentation** | |

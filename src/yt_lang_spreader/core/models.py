@@ -14,6 +14,8 @@ class VideoInfo:
     duration: float  # seconds
     video_path: str
     subtitles: list[dict] = field(default_factory=list)
+    transcript_source: str = "youtube_subtitles"
+    transcript_language: str = "unknown"
     # [{"start": float, "end": float, "text": str}, ...]
 
 

@@ -49,8 +49,11 @@ def main() -> None:
         help="Target language code (default: zh). e.g. zh, es, fr, de, ja, ko, pt, ru",
     )
     lang.add_argument(
-        "--source-lang", default="en",
-        help="Source subtitle language to extract (default: en)",
+        "--source-lang", default="auto",
+        help=(
+            "Source subtitle language (default: auto, uses original video language). "
+            "If unavailable, audio is transcribed in the video's original language."
+        ),
     )
 
     # --- Summarization ---

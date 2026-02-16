@@ -17,6 +17,10 @@ from PIL import Image, ImageDraw, ImageFont
 from ..core.models import Segment
 from ..utils.formatting import wrap_text
 
+# Pillow>=10 removed Image.ANTIALIAS, but moviepy 1.x still references it.
+if not hasattr(Image, "ANTIALIAS") and hasattr(Image, "Resampling"):
+    Image.ANTIALIAS = Image.Resampling.LANCZOS
+
 
 def extract_key_frames(
     video_path: str,

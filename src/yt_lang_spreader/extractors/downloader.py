@@ -8,6 +8,8 @@ import re
 import subprocess
 import xml.etree.ElementTree as ET
 
+from openai import OpenAI
+
 from ..core.models import VideoInfo
 
 
@@ -181,15 +183,205 @@ def _merge_short_segments(
     return merged
 
 
+def _get_attr_or_key(obj, key: str, default=None):
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _get_media_duration(path: str) -> float:
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=nokey=1:noprint_wrappers=1",
+        path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        return 0.0
+    try:
+        return float(result.stdout.strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _segment_audio_for_transcription(
+    video_path: str,
+    output_dir: str,
+    segment_seconds: int = 600,
+) -> list[str]:
+    chunk_dir = os.path.join(output_dir, "audio_chunks")
+    os.makedirs(chunk_dir, exist_ok=True)
+    output_pattern = os.path.join(chunk_dir, "chunk_%03d.mp3")
+    cmd = [
+        "ffmpeg",
+        "-i", video_path,
+        "-vn",
+        "-ac", "1",
+        "-ar", "16000",
+        "-c:a", "mp3",
+        "-f", "segment",
+        "-segment_time", str(segment_seconds),
+        "-y",
+        output_pattern,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        stderr = result.stderr.strip().splitlines()[-1] if result.stderr else ""
+        raise RuntimeError(
+            "Failed to extract audio for transcription. "
+            f"Please ensure ffmpeg is installed. {stderr}"
+        )
+
+    chunk_paths = sorted(
+        os.path.join(chunk_dir, f)
+        for f in os.listdir(chunk_dir)
+        if f.startswith("chunk_") and f.endswith(".mp3")
+    )
+    if not chunk_paths:
+        raise RuntimeError("No audio chunks were produced for transcription.")
+    return chunk_paths
+
+
+def _segments_from_transcription(
+    transcription,
+    chunk_start: float,
+    fallback_end: float,
+) -> list[dict]:
+    raw_segments = _get_attr_or_key(transcription, "segments", [])
+    segments: list[dict] = []
+
+    for seg in raw_segments or []:
+        text = _get_attr_or_key(seg, "text", "")
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            continue
+        start = float(_get_attr_or_key(seg, "start", 0.0)) + chunk_start
+        end = float(_get_attr_or_key(seg, "end", 0.0)) + chunk_start
+        if end <= start:
+            end = start + 0.5
+        segments.append({"start": start, "end": end, "text": text})
+
+    if segments:
+        return segments
+
+    text = _get_attr_or_key(transcription, "text", "")
+    text = re.sub(r"\s+", " ", str(text)).strip()
+    if not text:
+        return []
+    return [{"start": chunk_start, "end": fallback_end, "text": text}]
+
+
+def transcribe_narrative(
+    video_path: str,
+    output_dir: str,
+    api_key: str,
+    model: str = "whisper-1",
+    segment_seconds: int = 600,
+) -> tuple[list[dict], str]:
+    """Transcribe audio directly when no YouTube subtitles are available."""
+    if not api_key:
+        raise RuntimeError(
+            "No subtitles available and OPENAI_API_KEY is missing. "
+            "Set OPENAI_API_KEY to enable fallback transcription."
+        )
+
+    chunk_paths = _segment_audio_for_transcription(
+        video_path, output_dir, segment_seconds=segment_seconds
+    )
+    client = OpenAI(api_key=api_key)
+    all_segments: list[dict] = []
+    detected_language = ""
+
+    for i, chunk_path in enumerate(chunk_paths):
+        chunk_start = i * segment_seconds
+        chunk_duration = _get_media_duration(chunk_path)
+        fallback_end = chunk_start + max(chunk_duration, 1.0)
+
+        with open(chunk_path, "rb") as audio_file:
+            transcription = client.audio.transcriptions.create(
+                model=model,
+                file=audio_file,
+                response_format="verbose_json",
+                temperature=0,
+            )
+
+        if not detected_language:
+            detected_language = str(
+                _get_attr_or_key(transcription, "language", "")
+            ).strip()
+        all_segments.extend(
+            _segments_from_transcription(
+                transcription=transcription,
+                chunk_start=chunk_start,
+                fallback_end=fallback_end,
+            )
+        )
+
+    if not all_segments:
+        raise RuntimeError("Fallback transcription produced no text.")
+
+    all_segments.sort(key=lambda s: s["start"])
+    return _merge_short_segments(all_segments), (detected_language or "unknown")
+
+
+def _resolve_source_subtitle_language(info: dict, source_lang: str) -> str:
+    requested = (source_lang or "").strip()
+    if requested and requested.lower() != "auto":
+        return requested
+
+    original_lang = (info.get("language") or "").strip()
+    subtitles = info.get("subtitles") or {}
+    auto_subtitles = info.get("automatic_captions") or {}
+    available_langs = list(dict.fromkeys([
+        *subtitles.keys(),
+        *auto_subtitles.keys(),
+    ]))
+    if not available_langs:
+        return original_lang or "en"
+
+    if original_lang:
+        if original_lang in available_langs:
+            return original_lang
+
+        original_base = original_lang.split("-", 1)[0]
+        for lang in available_langs:
+            if lang == original_base or lang.startswith(original_base + "-"):
+                return lang
+
+    return available_langs[0]
+
+
 # ---------------------------------------------------------------------------
 # High-level entry point
 # ---------------------------------------------------------------------------
 
-def get_video_info(url: str, output_dir: str, source_lang: str = "en") -> VideoInfo:
-    """Download video, extract subtitles, and return a VideoInfo object."""
+def get_video_info(
+    url: str,
+    output_dir: str,
+    source_lang: str = "auto",
+    openai_api_key: str = "",
+    transcription_model: str = "whisper-1",
+) -> VideoInfo:
+    """Download video and return transcript from subtitles or audio transcription."""
     info = _get_video_info(url)
     video_path = download_video(url, output_dir)
-    subtitles = extract_subtitles(url, output_dir, lang=source_lang)
+    subtitle_lang = _resolve_source_subtitle_language(info, source_lang)
+    transcript_source = "youtube_subtitles"
+    transcript_language = subtitle_lang
+
+    try:
+        subtitles = extract_subtitles(url, output_dir, lang=subtitle_lang)
+    except RuntimeError:
+        subtitles, detected_language = transcribe_narrative(
+            video_path,
+            output_dir,
+            api_key=openai_api_key,
+            model=transcription_model,
+        )
+        transcript_source = "audio_transcription"
+        transcript_language = detected_language
 
     return VideoInfo(
         video_id=info["id"],
@@ -197,4 +389,6 @@ def get_video_info(url: str, output_dir: str, source_lang: str = "en") -> VideoI
         duration=info.get("duration", 0),
         video_path=video_path,
         subtitles=subtitles,
+        transcript_source=transcript_source,
+        transcript_language=transcript_language,
     )

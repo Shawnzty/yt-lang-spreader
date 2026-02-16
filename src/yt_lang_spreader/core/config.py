@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -14,7 +15,7 @@ class PipelineConfig:
     url: str = ""
 
     # --- Language ---
-    source_lang: str = "en"
+    source_lang: str = "auto"
     target_lang: str = "zh"
 
     # --- Summarization ---
@@ -56,9 +57,53 @@ class PipelineConfig:
     output_dir: str = "output"
     keep_temp: bool = False
 
+    @staticmethod
+    def _load_dotenv() -> dict[str, str]:
+        """Load simple KEY=VALUE pairs from .env if present."""
+        candidates = [
+            Path.cwd() / ".env",
+            Path(__file__).resolve().parents[3] / ".env",
+        ]
+
+        for dotenv_path in candidates:
+            if not dotenv_path.exists():
+                continue
+
+            values: dict[str, str] = {}
+            for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[len("export "):].strip()
+                if "=" not in line:
+                    continue
+
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                if not key:
+                    continue
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                    value = value[1:-1]
+                values[key] = value
+
+            if values:
+                return values
+
+        return {}
+
     def resolve_api_keys(self) -> None:
         """Fill in API keys from environment variables when not set explicitly."""
+        dotenv_values = self._load_dotenv()
+
         if not self.openai_api_key:
-            self.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+            self.openai_api_key = (
+                os.environ.get("OPENAI_API_KEY", "")
+                or dotenv_values.get("OPENAI_API_KEY", "")
+            )
         if not self.elevenlabs_api_key:
-            self.elevenlabs_api_key = os.environ.get("ELEVENLABS_API_KEY", "")
+            self.elevenlabs_api_key = (
+                os.environ.get("ELEVENLABS_API_KEY", "")
+                or dotenv_values.get("ELEVENLABS_API_KEY", "")
+            )
