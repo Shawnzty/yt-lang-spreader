@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "yt-lang-spreader"
-version = "0.1.0"
+version = "0.2.0"
 description = "YouTube video summarizer, translator, and narrator with video generation"
 requires-python = ">=3.9"
 dependencies = [
@@ -13,6 +13,18 @@ dependencies = [
     "gtts>=2.5.0",
     "moviepy>=1.0.3",
     "Pillow>=10.0.0",
+    "matplotlib>=3.7.0",
+    "requests>=2.28.0",
+]
+
+[project.optional-dependencies]
+stock = ["yfinance>=0.2.0", "numpy>=1.24.0"]
+elevenlabs = ["requests>=2.28.0"]
+gui = ["gradio>=4.0.0"]
+all = [
+    "yfinance>=0.2.0",
+    "numpy>=1.24.0",
+    "gradio>=4.0.0",
 ]
 
 [project.scripts]

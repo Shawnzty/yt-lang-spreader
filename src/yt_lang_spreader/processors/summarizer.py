@@ -1,12 +1,12 @@
 """Summarize video segments using OpenAI GPT."""
 
-import os
+from __future__ import annotations
 
 from openai import OpenAI
 
-from .segmenter import Segment
+from ..core.models import Segment
+from ..utils.formatting import format_time_short
 
-# Compression level descriptions for the prompt
 COMPRESSION_PROMPTS = {
     1: (
         "Provide a detailed summary that retains most of the original content. "
@@ -40,25 +40,14 @@ def summarize_segments(
     segments: list[Segment],
     video_title: str,
     compression_level: int = 3,
-    api_key: str | None = None,
+    api_key: str = "",
     model: str = "gpt-4o-mini",
 ) -> list[Segment]:
-    """Summarize each segment using OpenAI.
-
-    Args:
-        segments: List of Segment objects with text filled in.
-        video_title: Title of the video for context.
-        compression_level: 1 (least compression) to 5 (most compression).
-        api_key: OpenAI API key. If None, reads from OPENAI_API_KEY env var.
-        model: OpenAI model to use.
-
-    Returns:
-        The same segments with summary field filled in.
-    """
+    """Summarize each segment using OpenAI."""
     compression_level = max(1, min(5, compression_level))
     compression_prompt = COMPRESSION_PROMPTS[compression_level]
 
-    client = OpenAI(api_key=api_key or os.environ.get("OPENAI_API_KEY"))
+    client = OpenAI(api_key=api_key)
 
     system_prompt = (
         "You are a video content summarizer. You will receive a transcript segment "
@@ -83,7 +72,8 @@ def summarize_segments(
                     "role": "user",
                     "content": (
                         f"Segment {segment.index} "
-                        f"({_format_time(segment.start)} - {_format_time(segment.end)}):\n\n"
+                        f"({format_time_short(segment.start)} - "
+                        f"{format_time_short(segment.end)}):\n\n"
                         f"{segment.text}"
                     ),
                 },
@@ -93,10 +83,3 @@ def summarize_segments(
         segment.summary = response.choices[0].message.content.strip()
 
     return segments
-
-
-def _format_time(seconds: float) -> str:
-    """Format seconds to MM:SS."""
-    m = int(seconds // 60)
-    s = int(seconds % 60)
-    return f"{m:02d}:{s:02d}"

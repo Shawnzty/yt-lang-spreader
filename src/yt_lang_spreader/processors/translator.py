@@ -1,12 +1,11 @@
 """Translate summarized segments using OpenAI GPT."""
 
-import os
+from __future__ import annotations
 
 from openai import OpenAI
 
-from .segmenter import Segment
+from ..core.models import Segment
 
-# Common language names for better prompts
 LANGUAGE_NAMES = {
     "zh": "Simplified Chinese",
     "zh-TW": "Traditional Chinese",
@@ -33,22 +32,12 @@ LANGUAGE_NAMES = {
 def translate_segments(
     segments: list[Segment],
     target_lang: str,
-    api_key: str | None = None,
+    api_key: str = "",
     model: str = "gpt-4o-mini",
 ) -> list[Segment]:
-    """Translate the summary of each segment to the target language.
-
-    Args:
-        segments: List of Segment objects with summary filled in.
-        target_lang: Target language code (e.g., "zh", "es", "fr").
-        api_key: OpenAI API key. If None, reads from OPENAI_API_KEY env var.
-        model: OpenAI model to use.
-
-    Returns:
-        The same segments with translated_summary field filled in.
-    """
+    """Translate the summary of each segment to the target language."""
     lang_name = LANGUAGE_NAMES.get(target_lang, target_lang)
-    client = OpenAI(api_key=api_key or os.environ.get("OPENAI_API_KEY"))
+    client = OpenAI(api_key=api_key)
 
     system_prompt = (
         f"You are a professional translator. Translate the following narration "

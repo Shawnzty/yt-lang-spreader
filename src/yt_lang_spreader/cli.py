@@ -1,12 +1,15 @@
 """Command-line interface for YouTube Language Spreader."""
 
+from __future__ import annotations
+
 import argparse
 import sys
 
-from .pipeline import run_pipeline
+from .core.config import PipelineConfig
+from .core.pipeline import run_pipeline
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         prog="yt-lang-spreader",
         description=(
@@ -17,95 +20,145 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  %(prog)s https://youtu.be/abc123 --lang zh\n"
-            "  %(prog)s https://youtu.be/abc123 --lang es --compression 2\n"
-            "  %(prog)s https://youtu.be/abc123 --lang ja --segments 5 --frames 4\n"
+            "  # Basic: summarize and translate to Chinese (default)\n"
+            "  %(prog)s https://youtu.be/abc123\n"
+            "\n"
+            "  # Use your cloned voice via ElevenLabs\n"
+            "  %(prog)s https://youtu.be/abc123 --lang zh \\\n"
+            "      --tts elevenlabs --elevenlabs-voice-id YOUR_VOICE_ID\n"
+            "\n"
+            "  # Use pre-recorded audio files (your own voice)\n"
+            "  %(prog)s https://youtu.be/abc123 --lang es \\\n"
+            "      --tts local --local-voice-dir ./my_recordings/\n"
+            "\n"
+            "  # Enable stock chart generation for finance videos\n"
+            "  %(prog)s https://youtu.be/abc123 --lang zh --stock-charts\n"
+            "\n"
+            "  # Low compression, Japanese, 5 segments, no burned-in subs\n"
+            "  %(prog)s https://youtu.be/abc123 --lang ja -c 1 -s 5 --no-subtitles\n"
         ),
     )
 
-    parser.add_argument(
-        "url",
-        help="YouTube video URL",
+    # --- Required ---
+    parser.add_argument("url", help="YouTube video URL")
+
+    # --- Language ---
+    lang = parser.add_argument_group("language")
+    lang.add_argument(
+        "--lang", "-l", default="zh",
+        help="Target language code (default: zh). e.g. zh, es, fr, de, ja, ko, pt, ru",
     )
-    parser.add_argument(
-        "--lang", "-l",
-        default="zh",
-        help=(
-            "Target language code (default: zh). "
-            "Supported: zh, zh-TW, en, es, fr, de, ja, ko, pt, ru, ar, hi, it, etc."
-        ),
+    lang.add_argument(
+        "--source-lang", default="en",
+        help="Source subtitle language to extract (default: en)",
     )
-    parser.add_argument(
-        "--compression", "-c",
-        type=int,
-        default=3,
-        choices=[1, 2, 3, 4, 5],
-        help=(
-            "Compression level 1-5 (default: 3). "
-            "1=detailed (keep ~80%%), 2=moderate (~50%%), 3=concise (~30%%), "
-            "4=brief (~20%%), 5=ultra-brief (~10%%)"
-        ),
+
+    # --- Summarization ---
+    summ = parser.add_argument_group("summarization")
+    summ.add_argument(
+        "--compression", "-c", type=int, default=3, choices=[1, 2, 3, 4, 5],
+        help="Compression level 1-5 (default: 3). 1=detailed, 5=ultra-brief",
     )
-    parser.add_argument(
-        "--output", "-o",
-        default="output",
-        help="Output directory (default: output)",
+
+    # --- Segmentation ---
+    seg = parser.add_argument_group("segmentation")
+    seg.add_argument(
+        "--segments", "-s", type=int, default=None,
+        help="Number of segments (auto if not set)",
     )
-    parser.add_argument(
-        "--segments", "-s",
-        type=int,
-        default=None,
-        help="Number of segments to split the video into (auto if not set)",
-    )
-    parser.add_argument(
-        "--segment-duration",
-        type=float,
-        default=None,
+    seg.add_argument(
+        "--segment-duration", type=float, default=120.0,
         help="Target segment duration in seconds (default: 120)",
     )
-    parser.add_argument(
-        "--frames", "-f",
-        type=int,
-        default=3,
-        help="Number of key frames per segment (default: 3)",
+
+    # --- TTS / Narration ---
+    tts = parser.add_argument_group("narration (TTS)")
+    tts.add_argument(
+        "--tts", default="gtts",
+        choices=["gtts", "elevenlabs", "openai_tts", "local"],
+        help="TTS backend (default: gtts). Use 'elevenlabs' for your cloned voice, "
+             "'local' for pre-recorded audio files",
     )
-    parser.add_argument(
-        "--no-subtitles",
-        action="store_true",
-        help="Do not overlay subtitles on the output video",
+    tts.add_argument(
+        "--elevenlabs-voice-id", default="",
+        help="ElevenLabs voice ID (for cloned voice). Get it from elevenlabs.io/voice-lab",
     )
-    parser.add_argument(
-        "--api-key",
-        default=None,
-        help="OpenAI API key (or set OPENAI_API_KEY env var)",
+    tts.add_argument(
+        "--elevenlabs-model", default="eleven_multilingual_v2",
+        help="ElevenLabs model (default: eleven_multilingual_v2)",
     )
-    parser.add_argument(
-        "--model",
-        default="gpt-4o-mini",
-        help="OpenAI model for summarization/translation (default: gpt-4o-mini)",
+    tts.add_argument(
+        "--elevenlabs-api-key", default="",
+        help="ElevenLabs API key (or set ELEVENLABS_API_KEY env var)",
     )
-    parser.add_argument(
-        "--keep-temp",
-        action="store_true",
-        help="Keep temporary files (downloaded video, frames, audio)",
+    tts.add_argument(
+        "--openai-tts-voice", default="alloy",
+        help="OpenAI TTS voice (default: alloy). Options: alloy, echo, fable, onyx, nova, shimmer",
     )
+    tts.add_argument(
+        "--local-voice-dir", default="",
+        help="Directory with pre-recorded audio files (narration_001.mp3, etc.)",
+    )
+
+    # --- Video ---
+    vid = parser.add_argument_group("video output")
+    vid.add_argument(
+        "--frames", "-f", type=int, default=3,
+        help="Key frames per segment (default: 3)",
+    )
+    vid.add_argument(
+        "--no-subtitles", action="store_true",
+        help="Do not burn subtitle overlay into the video",
+    )
+    vid.add_argument(
+        "--no-subtitle-files", action="store_true",
+        help="Do not generate SRT/VTT subtitle files",
+    )
+
+    # --- Plugins ---
+    plug = parser.add_argument_group("plugins")
+    plug.add_argument(
+        "--stock-charts", action="store_true",
+        help="Enable stock chart generation for finance/quant videos",
+    )
+
+    # --- OpenAI ---
+    oai = parser.add_argument_group("OpenAI")
+    oai.add_argument("--api-key", default="", help="OpenAI API key (or set OPENAI_API_KEY)")
+    oai.add_argument("--model", default="gpt-4o-mini", help="OpenAI model (default: gpt-4o-mini)")
+
+    # --- Output ---
+    out = parser.add_argument_group("output")
+    out.add_argument("--output", "-o", default="output", help="Output directory (default: output)")
+    out.add_argument("--keep-temp", action="store_true", help="Keep temporary files")
 
     args = parser.parse_args()
 
+    config = PipelineConfig(
+        url=args.url,
+        source_lang=args.source_lang,
+        target_lang=args.lang,
+        compression_level=args.compression,
+        num_segments=args.segments,
+        segment_duration=args.segment_duration,
+        frames_per_segment=args.frames,
+        tts_backend=args.tts,
+        elevenlabs_voice_id=args.elevenlabs_voice_id,
+        elevenlabs_model=args.elevenlabs_model,
+        elevenlabs_api_key=args.elevenlabs_api_key,
+        openai_tts_voice=args.openai_tts_voice,
+        local_voice_dir=args.local_voice_dir,
+        generate_subtitles=not args.no_subtitle_files,
+        show_subtitles=not args.no_subtitles,
+        enable_stock_charts=args.stock_charts,
+        openai_api_key=args.api_key,
+        openai_model=args.model,
+        output_dir=args.output,
+        keep_temp=args.keep_temp,
+    )
+
     try:
-        output_path = run_pipeline(
-            url=args.url,
-            target_lang=args.lang,
-            compression_level=args.compression,
-            output_dir=args.output,
-            num_segments=args.segments,
-            segment_duration=args.segment_duration,
-            frames_per_segment=args.frames,
-            show_subtitles=not args.no_subtitles,
-            openai_api_key=args.api_key,
-            openai_model=args.model,
-            keep_temp=args.keep_temp,
-        )
+        run_pipeline(config)
     except KeyboardInterrupt:
         print("\nAborted.")
         sys.exit(1)

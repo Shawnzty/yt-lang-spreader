@@ -1,5 +1,17 @@
+# Core dependencies
 yt-dlp>=2024.1.0
 openai>=1.0.0
 gtts>=2.5.0
 moviepy>=1.0.3
 Pillow>=10.0.0
+matplotlib>=3.7.0
+requests>=2.28.0
+
+# Optional: stock chart plotting
+# yfinance>=0.2.0
+# numpy>=1.24.0
+
+# Optional: ElevenLabs voice cloning (requests already included above)
+
+# Optional: GUI
+# gradio>=4.0.0
