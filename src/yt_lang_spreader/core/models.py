@@ -28,9 +28,18 @@ class Segment:
     end: float  # seconds
     text: str  # original transcript
 
+    # --- Topic classification (set by semantic segmenter) ---
+    topic_type: str = ""  # "macro" | "index" | "stock"
+    topic_label: str = ""  # e.g. "Fed Meeting", "SP500", "NVDA"
+    tickers: list[str] = field(default_factory=list)  # detected tickers
+    support_levels: list[float] = field(default_factory=list)
+    resistance_levels: list[float] = field(default_factory=list)
+
+    # --- Processing outputs ---
     summary: str = ""
     translated_summary: str = ""
 
     audio_path: str = ""  # path to narration audio file
     frame_paths: list[str] = field(default_factory=list)  # key frame images
+    slide_paths: list[str] = field(default_factory=list)  # generated info slides
     chart_paths: list[str] = field(default_factory=list)  # generated chart images

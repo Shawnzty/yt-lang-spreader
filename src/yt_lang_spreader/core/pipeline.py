@@ -11,6 +11,7 @@ from .config import PipelineConfig
 from .models import Segment
 from ..extractors.downloader import get_video_info
 from ..generators.narrator import generate_narration
+from ..generators.slides import generate_slides
 from ..generators.subtitles import generate_subtitle_files
 from ..generators.video_maker import create_video, extract_key_frames
 from ..processors.segmenter import segment_subtitles
@@ -23,15 +24,17 @@ def run_pipeline(config: PipelineConfig) -> str:
     """Run the full processing pipeline.
 
     Steps:
-    1. Download video and extract subtitles
-    2. Segment the transcript into parts
-    3. Summarize each part (with compression level)
-    4. Translate summaries to target language
-    5. Generate TTS narration audio
-    6. Extract key frames from original video
-    6b. (Optional) Generate stock charts for relevant segments
-    7. Generate subtitle files (SRT/VTT) for YouTube CC
-    8. Assemble final video
+     1. Download video and extract subtitles
+     2. Semantic segmentation (macro / index / stock topics)
+     3. Summarize each segment
+     4. Translate summaries to target language
+     5. Generate TTS narration audio
+     6. Extract key frames from original video
+     7. Generate visuals per segment type:
+        - macro  → bullet-point info slides
+        - index/stock → candlestick charts (with GPT-Vision S/R detection)
+     8. Generate subtitle files (SRT/VTT) for YouTube CC
+     9. Assemble final video
 
     Returns:
         Path to the output video file.
@@ -42,7 +45,7 @@ def run_pipeline(config: PipelineConfig) -> str:
 
     try:
         # Step 1: Download and extract subtitles
-        print("\n[1/8] Downloading video and extracting subtitles...")
+        print("\n[1/9] Downloading video and extracting subtitles...")
         video_info = get_video_info(
             config.url,
             os.path.join(tmp_dir, "video"),
@@ -55,24 +58,34 @@ def run_pipeline(config: PipelineConfig) -> str:
         print(f"      Transcript language: {video_info.transcript_language}")
         print(f"      Subtitle segments: {len(video_info.subtitles)}")
 
-        # Step 2: Segment the transcript
-        print("\n[2/8] Segmenting transcript into parts...")
+        # Step 2: Semantic segmentation
+        print("\n[2/9] Segmenting transcript by topic (semantic)...")
         segments = segment_subtitles(
             video_info.subtitles,
             video_info.duration,
             num_segments=config.num_segments,
             segment_duration=config.segment_duration,
+            api_key=config.openai_api_key,
+            model=config.openai_model,
+            video_title=video_info.title,
         )
         print(f"      Created {len(segments)} segments")
         for seg in segments:
+            tickers_str = f" [{', '.join(seg.tickers)}]" if seg.tickers else ""
+            sr_str = ""
+            if seg.support_levels or seg.resistance_levels:
+                sr_str = (
+                    f" S:{seg.support_levels} R:{seg.resistance_levels}"
+                )
             print(
-                f"      Part {seg.index}: "
-                f"{format_timestamp(seg.start)} - {format_timestamp(seg.end)}"
+                f"      Part {seg.index}: [{seg.topic_type}] {seg.topic_label}"
+                f"{tickers_str}{sr_str} "
+                f"({format_timestamp(seg.start)} - {format_timestamp(seg.end)})"
             )
 
         # Step 3: Summarize each segment
         print(
-            f"\n[3/8] Summarizing segments "
+            f"\n[3/9] Summarizing segments "
             f"(compression level {config.compression_level})..."
         )
         segments = summarize_segments(
@@ -89,7 +102,7 @@ def run_pipeline(config: PipelineConfig) -> str:
             print(f"      Part {seg.index}: {preview}")
 
         # Step 4: Translate summaries
-        print(f"\n[4/8] Translating to {config.target_lang}...")
+        print(f"\n[4/9] Translating to {config.target_lang}...")
         segments = translate_segments(
             segments,
             config.target_lang,
@@ -103,7 +116,7 @@ def run_pipeline(config: PipelineConfig) -> str:
 
         # Step 5: Generate narration audio
         print(
-            f"\n[5/8] Generating narration audio "
+            f"\n[5/9] Generating narration audio "
             f"(backend: {config.tts_backend})..."
         )
         audio_dir = os.path.join(tmp_dir, "audio")
@@ -111,9 +124,9 @@ def run_pipeline(config: PipelineConfig) -> str:
         generated = sum(1 for seg in segments if seg.audio_path)
         print(f"      Generated {generated} audio files")
 
-        # Step 6: Extract key frames
+        # Step 6: Extract key frames (needed for GPT Vision S/R detection)
         print(
-            f"\n[6/8] Extracting key frames "
+            f"\n[6/9] Extracting key frames "
             f"({config.frames_per_segment} per segment)..."
         )
         frames_dir = os.path.join(tmp_dir, "frames")
@@ -123,20 +136,40 @@ def run_pipeline(config: PipelineConfig) -> str:
         total_frames = sum(len(seg.frame_paths) for seg in segments)
         print(f"      Extracted {total_frames} frames")
 
-        # Step 6b: Stock charts (optional plugin)
-        if config.enable_stock_charts:
-            print("\n[6b/8] Generating stock charts...")
-            from ..plugins.stock_charts import generate_stock_charts
+        # Step 7: Generate visuals per segment type
+        print("\n[7/9] Generating visuals by segment type...")
+        slides_dir = os.path.join(tmp_dir, "slides")
+        charts_dir = os.path.join(tmp_dir, "charts")
 
-            charts_dir = os.path.join(tmp_dir, "charts")
-            segments = generate_stock_charts(segments, charts_dir)
-            total_charts = sum(len(seg.chart_paths) for seg in segments)
-            print(f"      Generated {total_charts} charts")
+        macro_count = 0
+        chart_count = 0
 
-        # Step 7: Generate subtitle files for YouTube CC
+        for seg in segments:
+            if seg.topic_type == "macro":
+                # Generate clean info slides with bullet points
+                paths = generate_slides(
+                    seg, slides_dir,
+                    api_key=config.openai_api_key,
+                    model=config.openai_model,
+                    size=config.video_size,
+                )
+                seg.slide_paths = paths
+                macro_count += len(paths)
+
+            elif seg.topic_type in ("index", "stock") and seg.tickers:
+                # Generate candlestick charts (with GPT-Vision S/R refinement)
+                from ..plugins.stock_charts import generate_stock_charts
+
+                generate_stock_charts([seg], charts_dir, config)
+                chart_count += len(seg.chart_paths)
+
+        print(f"      Macro slides: {macro_count}")
+        print(f"      Stock/index charts: {chart_count}")
+
+        # Step 8: Generate subtitle files for YouTube CC
         safe_title = _safe_filename(video_info.title)
         if config.generate_subtitles:
-            print("\n[7/8] Generating subtitle files (SRT/VTT)...")
+            print("\n[8/9] Generating subtitle files (SRT/VTT)...")
             sub_base = f"{safe_title}_{config.target_lang}"
             sub_paths = generate_subtitle_files(
                 segments,
@@ -147,13 +180,13 @@ def run_pipeline(config: PipelineConfig) -> str:
             for p in sub_paths:
                 print(f"      {p}")
         else:
-            print("\n[7/8] Subtitle file generation skipped")
+            print("\n[8/9] Subtitle file generation skipped")
 
-        # Step 8: Assemble video
+        # Step 9: Assemble video
         output_filename = f"{safe_title}_{config.target_lang}.mp4"
         output_path = os.path.join(config.output_dir, output_filename)
 
-        print("\n[8/8] Assembling final video...")
+        print("\n[9/9] Assembling final video...")
         output_path = create_video(
             segments,
             output_path,
@@ -191,11 +224,17 @@ def _save_metadata(
         "target_language": config.target_lang,
         "compression_level": config.compression_level,
         "tts_backend": config.tts_backend,
+        "stock_api": config.stock_api,
         "segments": [
             {
                 "index": seg.index,
                 "start": seg.start,
                 "end": seg.end,
+                "topic_type": seg.topic_type,
+                "topic_label": seg.topic_label,
+                "tickers": seg.tickers,
+                "support_levels": seg.support_levels,
+                "resistance_levels": seg.resistance_levels,
                 "original_text": seg.text[:500],
                 "summary": seg.summary,
                 "translated_summary": seg.translated_summary,

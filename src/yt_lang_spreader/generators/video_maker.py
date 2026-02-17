@@ -1,4 +1,10 @@
-"""Extract key frames and assemble the final video with narration."""
+"""Extract key frames and assemble the final video with narration.
+
+Routing by segment topic_type:
+  - "macro" segments → use generated info slides (slide_paths)
+  - "index"/"stock" segments → use generated candlestick charts (chart_paths)
+  - Fallback → original video key frames (frame_paths), then text-only clip
+"""
 
 from __future__ import annotations
 
@@ -61,16 +67,38 @@ def extract_key_frames(
     return segments
 
 
+def _select_images_for_segment(segment: Segment) -> list[str]:
+    """Pick the right images based on the segment's topic type.
+
+    - macro  → slides first, fall back to frames
+    - index/stock → charts first, fall back to frames
+    - other  → frames + charts + slides (all available)
+    """
+    if segment.topic_type == "macro":
+        if segment.slide_paths:
+            return list(segment.slide_paths)
+        return list(segment.frame_paths)
+
+    if segment.topic_type in ("index", "stock"):
+        if segment.chart_paths:
+            return list(segment.chart_paths)
+        return list(segment.frame_paths)
+
+    # Unknown type: use everything available
+    return list(segment.slide_paths) + list(segment.chart_paths) + list(segment.frame_paths)
+
+
 def create_video(
     segments: list[Segment],
     output_path: str,
     video_size: tuple[int, int] = (1280, 720),
     show_subtitles: bool = True,
 ) -> str:
-    """Assemble the final video from segment data (frames, charts, audio).
+    """Assemble the final video from segment data.
 
-    For each segment, displays key frames and any generated charts as a
-    slideshow, with narration audio and optional subtitle overlay.
+    Routes visuals based on segment topic_type:
+      macro  → info slides with bullet points
+      index/stock → candlestick charts
     """
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     clips = []
@@ -84,8 +112,7 @@ def create_video(
         audio_clip = AudioFileClip(segment.audio_path)
         seg_duration = audio_clip.duration
 
-        # Combine key frames and chart images for this segment
-        all_images = list(segment.frame_paths) + list(segment.chart_paths)
+        all_images = _select_images_for_segment(segment)
 
         if not all_images:
             clip = _create_text_only_clip(text, seg_duration, video_size)
@@ -140,7 +167,6 @@ def create_video(
 # ---------------------------------------------------------------------------
 
 def _get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Try to load a TrueType font, fall back to default."""
     font_paths = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
@@ -158,7 +184,6 @@ def _get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 def _create_text_only_clip(
     text: str, duration: float, size: tuple[int, int]
 ) -> ImageClip:
-    """Create a clip with text centred on a dark background."""
     w, h = size
     img = Image.new("RGB", (w, h), color=(20, 20, 30))
     draw = ImageDraw.Draw(img)
@@ -181,7 +206,6 @@ def _create_text_only_clip(
 def _create_subtitle_clip(
     text: str, duration: float, size: tuple[int, int]
 ) -> ImageClip:
-    """Create a semi-transparent subtitle overlay clip."""
     w, _ = size
     sub_h = 80
     img = Image.new("RGBA", (w, sub_h), color=(0, 0, 0, 160))

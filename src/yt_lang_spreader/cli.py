@@ -124,6 +124,23 @@ def main() -> None:
         "--stock-charts", action="store_true",
         help="Enable stock chart generation for finance/quant videos",
     )
+    plug.add_argument(
+        "--stock-api", default="longport",
+        choices=["longport", "yfinance"],
+        help="Stock data API (default: longport). Falls back to yfinance if Longport unavailable.",
+    )
+    plug.add_argument(
+        "--longport-app-key", default="",
+        help="Longport app key (or set LONGPORT_APP_KEY env var)",
+    )
+    plug.add_argument(
+        "--longport-app-secret", default="",
+        help="Longport app secret (or set LONGPORT_APP_SECRET env var)",
+    )
+    plug.add_argument(
+        "--longport-access-token", default="",
+        help="Longport access token (or set LONGPORT_ACCESS_TOKEN env var)",
+    )
 
     # --- OpenAI ---
     oai = parser.add_argument_group("OpenAI")
@@ -154,6 +171,10 @@ def main() -> None:
         generate_subtitles=not args.no_subtitle_files,
         show_subtitles=not args.no_subtitles,
         enable_stock_charts=args.stock_charts,
+        stock_api=args.stock_api,
+        longport_app_key=args.longport_app_key,
+        longport_app_secret=args.longport_app_secret,
+        longport_access_token=args.longport_access_token,
         openai_api_key=args.api_key,
         openai_model=args.model,
         output_dir=args.output,

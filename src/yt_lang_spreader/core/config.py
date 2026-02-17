@@ -46,6 +46,12 @@ class PipelineConfig:
     # --- Plugins ---
     enable_stock_charts: bool = False  # auto-detect and plot stock charts
 
+    # --- Stock data API ---
+    stock_api: str = "longport"  # "longport" | "yfinance"
+    longport_app_key: str = ""
+    longport_app_secret: str = ""
+    longport_access_token: str = ""
+
     # --- OpenAI ---
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
@@ -106,4 +112,19 @@ class PipelineConfig:
             self.elevenlabs_api_key = (
                 os.environ.get("ELEVENLABS_API_KEY", "")
                 or dotenv_values.get("ELEVENLABS_API_KEY", "")
+            )
+        if not self.longport_app_key:
+            self.longport_app_key = (
+                os.environ.get("LONGPORT_APP_KEY", "")
+                or dotenv_values.get("LONGPORT_APP_KEY", "")
+            )
+        if not self.longport_app_secret:
+            self.longport_app_secret = (
+                os.environ.get("LONGPORT_APP_SECRET", "")
+                or dotenv_values.get("LONGPORT_APP_SECRET", "")
+            )
+        if not self.longport_access_token:
+            self.longport_access_token = (
+                os.environ.get("LONGPORT_ACCESS_TOKEN", "")
+                or dotenv_values.get("LONGPORT_ACCESS_TOKEN", "")
             )
