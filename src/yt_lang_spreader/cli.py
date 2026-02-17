@@ -165,7 +165,21 @@ def main() -> None:
     # --- OpenAI ---
     oai = parser.add_argument_group("OpenAI")
     oai.add_argument("--api-key", default="", help="OpenAI API key (or set OPENAI_API_KEY)")
-    oai.add_argument("--model", default="gpt-4o-mini", help="OpenAI model (default: gpt-4o-mini)")
+
+    # --- Models ---
+    mdl = parser.add_argument_group("models")
+    mdl.add_argument(
+        "--textmodel", default="gpt-4o-mini",
+        help="Text model for segmentation, summarization, translation, slides, vision (default: gpt-4o-mini)",
+    )
+    mdl.add_argument(
+        "--speechmodel", default="tts-1-hd",
+        help="OpenAI TTS model for narration (default: tts-1-hd)",
+    )
+    mdl.add_argument(
+        "--transcriptmodel", default="whisper-1",
+        help="Transcription model for audio fallback (default: whisper-1)",
+    )
 
     # --- Output ---
     out = parser.add_argument_group("output")
@@ -196,7 +210,9 @@ def main() -> None:
         longport_app_secret=args.longport_app_secret,
         longport_access_token=args.longport_access_token,
         openai_api_key=args.api_key,
-        openai_model=args.model,
+        text_model=args.textmodel,
+        speech_model=args.speechmodel,
+        transcript_model=args.transcriptmodel,
         output_dir=args.output,
         keep_temp=args.keep_temp,
     )

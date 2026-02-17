@@ -177,7 +177,7 @@ def _generate_openai_tts(
         audio_path = os.path.join(output_dir, f"narration_{segment.index:03d}.mp3")
 
         response = client.audio.speech.create(
-            model="tts-1",
+            model=config.speech_model,
             voice=config.openai_tts_voice,
             input=text,
         )

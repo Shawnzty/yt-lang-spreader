@@ -128,7 +128,7 @@ def _refine_levels_from_frames(segment: Segment, config: PipelineConfig) -> None
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=config.text_model,
             messages=messages,
             max_tokens=200,
             temperature=0,

@@ -43,6 +43,19 @@ def run_pipeline(config: PipelineConfig) -> str:
     os.makedirs(config.output_dir, exist_ok=True)
     tmp_dir = tempfile.mkdtemp(prefix="yt_lang_spreader_")
 
+    # Print models in use
+    print("\n=== Models in use ===")
+    print(f"  Text model       : {config.text_model}")
+    print(f"                     (segmentation, summarization, translation, slides, vision)")
+    print(f"  Speech model     : {config.speech_model}")
+    print(f"                     (OpenAI TTS narration)")
+    print(f"  Transcript model : {config.transcript_model}")
+    print(f"                     (audio transcription fallback)")
+    if config.tts_backend == "elevenlabs":
+        print(f"  ElevenLabs model : {config.elevenlabs_model}")
+        print(f"                     (voice cloning narration)")
+    print("=====================")
+
     try:
         # Step 1: Download and extract subtitles
         print("\n[1/9] Downloading video and extracting subtitles...")
@@ -51,6 +64,7 @@ def run_pipeline(config: PipelineConfig) -> str:
             os.path.join(tmp_dir, "video"),
             source_lang=config.source_lang,
             openai_api_key=config.openai_api_key,
+            transcription_model=config.transcript_model,
         )
         print(f"      Title: {video_info.title}")
         print(f"      Duration: {format_timestamp(video_info.duration)}")
@@ -66,7 +80,7 @@ def run_pipeline(config: PipelineConfig) -> str:
             num_segments=config.num_segments,
             segment_duration=config.segment_duration,
             api_key=config.openai_api_key,
-            model=config.openai_model,
+            model=config.text_model,
             video_title=video_info.title,
         )
         print(f"      Created {len(segments)} segments")
@@ -99,7 +113,7 @@ def run_pipeline(config: PipelineConfig) -> str:
                 video_info.title,
                 compression_ratio=compression_ratio,
                 api_key=config.openai_api_key,
-                model=config.openai_model,
+                model=config.text_model,
             )
             for seg in segments:
                 preview = (
@@ -117,7 +131,7 @@ def run_pipeline(config: PipelineConfig) -> str:
             segments,
             config.target_lang,
             api_key=config.openai_api_key,
-            model=config.openai_model,
+            model=config.text_model,
         )
         for seg in segments:
             t = seg.translated_summary
@@ -160,7 +174,7 @@ def run_pipeline(config: PipelineConfig) -> str:
                 paths = generate_slides(
                     seg, slides_dir,
                     api_key=config.openai_api_key,
-                    model=config.openai_model,
+                    model=config.text_model,
                     size=config.video_size,
                 )
                 seg.slide_paths = paths
@@ -233,6 +247,9 @@ def _save_metadata(
         "video_title": video_info.title,
         "target_language": config.target_lang,
         "target_length_minutes": config.target_length_minutes,
+        "text_model": config.text_model,
+        "speech_model": config.speech_model,
+        "transcript_model": config.transcript_model,
         "tts_backend": config.tts_backend,
         "stock_api": config.stock_api,
         "segments": [

@@ -54,7 +54,11 @@ class PipelineConfig:
 
     # --- OpenAI ---
     openai_api_key: str = ""
-    openai_model: str = "gpt-4o-mini"
+
+    # --- Models ---
+    text_model: str = "gpt-4o-mini"        # segmentation, summarization, translation, slides, vision
+    speech_model: str = "tts-1-hd"         # OpenAI TTS narration
+    transcript_model: str = "whisper-1"    # audio transcription fallback
 
     # --- ElevenLabs ---
     elevenlabs_api_key: str = ""
