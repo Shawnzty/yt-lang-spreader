@@ -19,7 +19,7 @@ class PipelineConfig:
     target_lang: str = "zh"
 
     # --- Summarization ---
-    compression_level: int = 3  # 1 (detailed) – 5 (ultra-brief)
+    target_length_minutes: float | None = None  # None = no summarization (keep full)
 
     # --- Segmentation ---
     num_segments: int | None = None

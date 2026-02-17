@@ -83,23 +83,33 @@ def run_pipeline(config: PipelineConfig) -> str:
                 f"({format_timestamp(seg.start)} - {format_timestamp(seg.end)})"
             )
 
-        # Step 3: Summarize each segment
-        print(
-            f"\n[3/9] Summarizing segments "
-            f"(compression level {config.compression_level})..."
-        )
-        segments = summarize_segments(
-            segments,
-            video_info.title,
-            compression_level=config.compression_level,
-            api_key=config.openai_api_key,
-            model=config.openai_model,
-        )
-        for seg in segments:
-            preview = (
-                (seg.summary[:80] + "...") if len(seg.summary) > 80 else seg.summary
+        # Step 3: Summarize each segment (skip if --length not set)
+        if config.target_length_minutes is not None:
+            video_duration_min = video_info.duration / 60.0
+            compression_ratio = min(
+                config.target_length_minutes / video_duration_min, 1.0
+            ) if video_duration_min > 0 else 1.0
+            print(
+                f"\n[3/9] Summarizing segments "
+                f"(target ~{config.target_length_minutes:.0f}min from "
+                f"{video_duration_min:.0f}min, ratio {compression_ratio:.0%})..."
             )
-            print(f"      Part {seg.index}: {preview}")
+            segments = summarize_segments(
+                segments,
+                video_info.title,
+                compression_ratio=compression_ratio,
+                api_key=config.openai_api_key,
+                model=config.openai_model,
+            )
+            for seg in segments:
+                preview = (
+                    (seg.summary[:80] + "...") if len(seg.summary) > 80 else seg.summary
+                )
+                print(f"      Part {seg.index}: {preview}")
+        else:
+            print("\n[3/9] No target length set – keeping full transcript")
+            for seg in segments:
+                seg.summary = seg.text
 
         # Step 4: Translate summaries
         print(f"\n[4/9] Translating to {config.target_lang}...")
@@ -222,7 +232,7 @@ def _save_metadata(
         "source_url": config.url,
         "video_title": video_info.title,
         "target_language": config.target_lang,
-        "compression_level": config.compression_level,
+        "target_length_minutes": config.target_length_minutes,
         "tts_backend": config.tts_backend,
         "stock_api": config.stock_api,
         "segments": [

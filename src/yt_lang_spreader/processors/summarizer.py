@@ -7,45 +7,69 @@ from openai import OpenAI
 from ..core.models import Segment
 from ..utils.formatting import format_time_short
 
-COMPRESSION_PROMPTS = {
-    1: (
-        "Provide a detailed summary that retains most of the original content. "
-        "Keep key details, examples, and explanations. "
-        "Target length: about 70-80% of the original."
-    ),
-    2: (
-        "Provide a moderate summary that captures the main points and important details. "
-        "Remove redundancy but keep the narrative flow. "
-        "Target length: about 50-60% of the original."
-    ),
-    3: (
-        "Provide a concise summary of the key points only. "
-        "Focus on the main ideas and conclusions. "
-        "Target length: about 30-40% of the original."
-    ),
-    4: (
-        "Provide a very brief summary with only the essential takeaways. "
-        "Use short, direct sentences. "
-        "Target length: about 15-25% of the original."
-    ),
-    5: (
-        "Provide an ultra-brief summary in 1-2 sentences. "
-        "Only the single most important point. "
-        "Target length: about 5-10% of the original."
-    ),
-}
+
+def _build_compression_instruction(ratio: float) -> str:
+    """Build a GPT instruction string based on the target compression ratio.
+
+    Args:
+        ratio: target_length / original_length  (0.0–1.0).
+               Values >=1.0 mean no compression needed.
+    """
+    pct = int(round(ratio * 100))
+    if ratio >= 1.0:
+        return (
+            "No compression is needed. Keep the full content, preserving all details, "
+            "examples, and explanations. Rewrite as smooth narration."
+        )
+    if ratio >= 0.7:
+        return (
+            f"Provide a detailed summary that retains most of the original content. "
+            f"Keep key details, examples, and explanations. "
+            f"Target length: about {pct}% of the original."
+        )
+    if ratio >= 0.45:
+        return (
+            f"Provide a moderate summary that captures the main points and important details. "
+            f"Remove redundancy but keep the narrative flow. "
+            f"Target length: about {pct}% of the original."
+        )
+    if ratio >= 0.25:
+        return (
+            f"Provide a concise summary of the key points only. "
+            f"Focus on the main ideas and conclusions. "
+            f"Target length: about {pct}% of the original."
+        )
+    if ratio >= 0.10:
+        return (
+            f"Provide a very brief summary with only the essential takeaways. "
+            f"Use short, direct sentences. "
+            f"Target length: about {pct}% of the original."
+        )
+    return (
+        f"Provide an ultra-brief summary in 1-2 sentences. "
+        f"Only the single most important point. "
+        f"Target length: about {pct}% of the original."
+    )
 
 
 def summarize_segments(
     segments: list[Segment],
     video_title: str,
-    compression_level: int = 3,
+    compression_ratio: float = 1.0,
     api_key: str = "",
     model: str = "gpt-4o-mini",
 ) -> list[Segment]:
-    """Summarize each segment using OpenAI."""
-    compression_level = max(1, min(5, compression_level))
-    compression_prompt = COMPRESSION_PROMPTS[compression_level]
+    """Summarize each segment using OpenAI.
+
+    Args:
+        segments: list of Segment objects with .text populated.
+        video_title: title of the video (for GPT context).
+        compression_ratio: target_length / original_length (0.0–1.0).
+            1.0 means no compression; 0.5 means ~50% of original, etc.
+        api_key: OpenAI API key.
+        model: OpenAI model name.
+    """
+    compression_instruction = _build_compression_instruction(compression_ratio)
 
     client = OpenAI(api_key=api_key)
 
@@ -56,7 +80,7 @@ def summarize_segments(
         "voice narration. Do not use bullet points or markdown formatting. "
         "Write flowing paragraphs.\n\n"
         f"Video title: {video_title}\n\n"
-        f"Compression instruction: {compression_prompt}"
+        f"Compression instruction: {compression_instruction}"
     )
 
     for segment in segments:

@@ -3,10 +3,27 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 from .core.config import PipelineConfig
 from .core.pipeline import run_pipeline
+
+
+def _parse_length(value: str) -> float:
+    """Parse a target length string into minutes.
+
+    Accepts formats like: 10, 10min, 10m, 10minutes, 10 min, etc.
+    Returns the number as minutes (float).
+    """
+    value = value.strip()
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(?:min(?:utes?)?|m)?", value)
+    if not m:
+        raise argparse.ArgumentTypeError(
+            f"Invalid length format: '{value}'. "
+            "Use a number optionally followed by 'min'/'m'/'minutes', e.g. 10, 10min, 10m, 10minutes"
+        )
+    return float(m.group(1))
 
 
 def main() -> None:
@@ -34,8 +51,8 @@ def main() -> None:
             "  # Enable stock chart generation for finance videos\n"
             "  %(prog)s https://youtu.be/abc123 --lang zh --stock-charts\n"
             "\n"
-            "  # Low compression, Japanese, 5 segments, no burned-in subs\n"
-            "  %(prog)s https://youtu.be/abc123 --lang ja -c 1 -s 5 --no-subtitles\n"
+            "  # Summarize a 30-min video to ~10 minutes, Japanese, no burned-in subs\n"
+            "  %(prog)s https://youtu.be/abc123 --lang ja --length 10min -s 5 --no-subtitles\n"
         ),
     )
 
@@ -59,8 +76,11 @@ def main() -> None:
     # --- Summarization ---
     summ = parser.add_argument_group("summarization")
     summ.add_argument(
-        "--compression", "-c", type=int, default=3, choices=[1, 2, 3, 4, 5],
-        help="Compression level 1-5 (default: 3). 1=detailed, 5=ultra-brief",
+        "--length", type=_parse_length, default=None,
+        help=(
+            "Target output video length in minutes. Accepts: 10, 10min, 10m, 10minutes. "
+            "If not set, no summarization is performed (full transcript is kept)."
+        ),
     )
 
     # --- Segmentation ---
@@ -158,7 +178,7 @@ def main() -> None:
         url=args.url,
         source_lang=args.source_lang,
         target_lang=args.lang,
-        compression_level=args.compression,
+        target_length_minutes=args.length,
         num_segments=args.segments,
         segment_duration=args.segment_duration,
         frames_per_segment=args.frames,
