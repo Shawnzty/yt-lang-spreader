@@ -26,35 +26,8 @@ def _parse_length(value: str) -> float:
     return float(m.group(1))
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        prog="yt-lang-spreader",
-        description=(
-            "YouTube Language Spreader: Download a YouTube video, extract its "
-            "narrative, summarize and translate it, then generate a new video "
-            "with key frames and voice-over narration in your chosen language."
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Examples:\n"
-            "  # Basic: summarize and translate to Chinese (default)\n"
-            "  %(prog)s https://youtu.be/abc123\n"
-            "\n"
-            "  # Use your cloned voice via ElevenLabs\n"
-            "  %(prog)s https://youtu.be/abc123 --lang zh \\\n"
-            "      --tts elevenlabs --elevenlabs-voice-id YOUR_VOICE_ID\n"
-            "\n"
-            "  # Use pre-recorded audio files (your own voice)\n"
-            "  %(prog)s https://youtu.be/abc123 --lang es \\\n"
-            "      --tts local --local-voice-dir ./my_recordings/\n"
-            "\n"
-            "  # Enable stock chart generation for finance videos\n"
-            "  %(prog)s https://youtu.be/abc123 --lang zh --stock-charts\n"
-            "\n"
-            "  # Summarize a 30-min video to ~10 minutes, Japanese, no burned-in subs\n"
-            "  %(prog)s https://youtu.be/abc123 --lang ja --length 10min -s 5 --no-subtitles\n"
-        ),
-    )
+def _add_common_args(parser: argparse.ArgumentParser) -> None:
+    """Add all shared arguments to a parser (used by both run and debug)."""
 
     # --- Required ---
     parser.add_argument("url", help="YouTube video URL")
@@ -186,9 +159,10 @@ def main() -> None:
     out.add_argument("--output", "-o", default="output", help="Output directory (default: output)")
     out.add_argument("--keep-temp", action="store_true", help="Keep temporary files")
 
-    args = parser.parse_args()
 
-    config = PipelineConfig(
+def _build_config(args: argparse.Namespace, debug: bool = False) -> PipelineConfig:
+    """Build a PipelineConfig from parsed CLI args."""
+    return PipelineConfig(
         url=args.url,
         source_lang=args.source_lang,
         target_lang=args.lang,
@@ -215,7 +189,62 @@ def main() -> None:
         transcript_model=args.transcriptmodel,
         output_dir=args.output,
         keep_temp=args.keep_temp,
+        debug=debug,
     )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="yt-lang-spreader",
+        description=(
+            "YouTube Language Spreader: Download a YouTube video, extract its "
+            "narrative, summarize and translate it, then generate a new video "
+            "with key frames and voice-over narration in your chosen language."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  # Normal run\n"
+            "  %(prog)s run https://youtu.be/abc123\n"
+            "\n"
+            "  # Debug run (output to debug_YYYYMMDD_NNN/ folder)\n"
+            "  %(prog)s debug https://youtu.be/abc123\n"
+            "\n"
+            "  # Summarize to ~10 minutes, Japanese\n"
+            "  %(prog)s run https://youtu.be/abc123 --lang ja --length 10min\n"
+            "\n"
+            "  # Use your cloned voice via ElevenLabs\n"
+            "  %(prog)s run https://youtu.be/abc123 --lang zh \\\n"
+            "      --tts elevenlabs --elevenlabs-voice-id YOUR_VOICE_ID\n"
+        ),
+    )
+
+    subparsers = parser.add_subparsers(dest="command")
+
+    # --- run subcommand ---
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run the full pipeline (output_YYYYMMDD_NNN/)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_common_args(run_parser)
+
+    # --- debug subcommand ---
+    debug_parser = subparsers.add_parser(
+        "debug",
+        help="Run in debug mode (debug_YYYYMMDD_NNN/) with step-by-step output",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_common_args(debug_parser)
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    is_debug = args.command == "debug"
+    config = _build_config(args, debug=is_debug)
 
     try:
         run_pipeline(config)

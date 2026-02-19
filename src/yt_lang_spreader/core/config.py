@@ -67,6 +67,9 @@ class PipelineConfig:
     output_dir: str = "output"
     keep_temp: bool = False
 
+    # --- Debug mode ---
+    debug: bool = False
+
     @staticmethod
     def _load_dotenv() -> dict[str, str]:
         """Load simple KEY=VALUE pairs from .env if present."""
