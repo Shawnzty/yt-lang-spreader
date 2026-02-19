@@ -18,8 +18,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 
+
+TOTAL_STEPS = 9
 
 STEP_NAMES = {
     1: "download",
@@ -59,6 +62,45 @@ def create_run_dir(output_dir: str, debug: bool = False) -> str:
     run_dir = os.path.join(output_dir, f"{pattern}{run_id}")
     os.makedirs(run_dir, exist_ok=True)
     return run_dir
+
+
+def find_debug_runs(output_dir: str) -> list[dict]:
+    """Find all existing debug run directories.
+
+    Returns a list of dicts sorted by name (most recent last):
+      [{"path": "/abs/path", "name": "debug_20260219_001", "last_step": 4}, ...]
+    """
+    if not os.path.isdir(output_dir):
+        return []
+
+    runs = []
+    for d in sorted(os.listdir(output_dir)):
+        full = os.path.join(output_dir, d)
+        if not os.path.isdir(full):
+            continue
+        if not re.match(r"debug_\d{8}_\d{3}$", d):
+            continue
+        last = detect_last_completed_step(full)
+        runs.append({"path": full, "name": d, "last_step": last})
+    return runs
+
+
+def detect_last_completed_step(run_dir: str) -> int:
+    """Detect the highest step that has output files.
+
+    Checks for the key JSON output of each step:
+      step1 -> video_info.json
+      step2-9 -> segments.json
+    Returns 0 if no step is completed.
+    """
+    for step_num in range(TOTAL_STEPS, 0, -1):
+        sd = os.path.join(run_dir, f"step{step_num}_{STEP_NAMES[step_num]}")
+        if not os.path.isdir(sd):
+            continue
+        expected = "video_info.json" if step_num == 1 else "segments.json"
+        if os.path.isfile(os.path.join(sd, expected)):
+            return step_num
+    return 0
 
 
 def step_dir(run_dir: str, step_num: int) -> str:

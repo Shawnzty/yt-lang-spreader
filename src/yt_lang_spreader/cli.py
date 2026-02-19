@@ -7,7 +7,7 @@ import re
 import sys
 
 from .core.config import PipelineConfig
-from .core.pipeline import run_pipeline
+from .core.pipeline import resume_pipeline, run_pipeline
 
 
 def _parse_length(value: str) -> float:
@@ -26,11 +26,14 @@ def _parse_length(value: str) -> float:
     return float(m.group(1))
 
 
-def _add_common_args(parser: argparse.ArgumentParser) -> None:
+def _add_common_args(parser: argparse.ArgumentParser, url_required: bool = True) -> None:
     """Add all shared arguments to a parser (used by both run and debug)."""
 
-    # --- Required ---
-    parser.add_argument("url", help="YouTube video URL")
+    # --- URL (required for run, optional for debug resume) ---
+    if url_required:
+        parser.add_argument("url", help="YouTube video URL")
+    else:
+        parser.add_argument("url", nargs="?", default="", help="YouTube video URL (omit to resume a previous debug run)")
 
     # --- Language ---
     lang = parser.add_argument_group("language")
@@ -163,7 +166,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 def _build_config(args: argparse.Namespace, debug: bool = False) -> PipelineConfig:
     """Build a PipelineConfig from parsed CLI args."""
     return PipelineConfig(
-        url=args.url,
+        url=getattr(args, "url", "") or "",
         source_lang=args.source_lang,
         target_lang=args.lang,
         target_length_minutes=args.length,
@@ -207,35 +210,39 @@ def main() -> None:
             "  # Normal run\n"
             "  %(prog)s run https://youtu.be/abc123\n"
             "\n"
-            "  # Debug run (output to debug_YYYYMMDD_NNN/ folder)\n"
+            "  # Debug run (new, full pipeline)\n"
             "  %(prog)s debug https://youtu.be/abc123\n"
+            "\n"
+            "  # Resume a previous debug run interactively\n"
+            "  %(prog)s debug\n"
             "\n"
             "  # Summarize to ~10 minutes, Japanese\n"
             "  %(prog)s run https://youtu.be/abc123 --lang ja --length 10min\n"
-            "\n"
-            "  # Use your cloned voice via ElevenLabs\n"
-            "  %(prog)s run https://youtu.be/abc123 --lang zh \\\n"
-            "      --tts elevenlabs --elevenlabs-voice-id YOUR_VOICE_ID\n"
         ),
     )
 
     subparsers = parser.add_subparsers(dest="command")
 
-    # --- run subcommand ---
+    # --- run subcommand (URL required) ---
     run_parser = subparsers.add_parser(
         "run",
         help="Run the full pipeline (output_YYYYMMDD_NNN/)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    _add_common_args(run_parser)
+    _add_common_args(run_parser, url_required=True)
 
-    # --- debug subcommand ---
+    # --- debug subcommand (URL optional — omit to resume) ---
     debug_parser = subparsers.add_parser(
         "debug",
-        help="Run in debug mode (debug_YYYYMMDD_NNN/) with step-by-step output",
+        help="Debug mode: with URL starts new run; without URL resumes previous run",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "If no URL is given, lists existing debug runs and lets you\n"
+            "resume step-by-step. You can run one step at a time, inspect\n"
+            "or edit the intermediate JSON files, then continue.\n"
+        ),
     )
-    _add_common_args(debug_parser)
+    _add_common_args(debug_parser, url_required=False)
 
     args = parser.parse_args()
 
@@ -243,11 +250,20 @@ def main() -> None:
         parser.print_help()
         sys.exit(1)
 
-    is_debug = args.command == "debug"
-    config = _build_config(args, debug=is_debug)
-
     try:
-        run_pipeline(config)
+        if args.command == "run":
+            config = _build_config(args, debug=False)
+            run_pipeline(config)
+
+        elif args.command == "debug":
+            config = _build_config(args, debug=True)
+            if config.url:
+                # New debug run with URL — run full pipeline
+                run_pipeline(config)
+            else:
+                # No URL — resume a previous debug run interactively
+                resume_pipeline(config)
+
     except KeyboardInterrupt:
         print("\nAborted.")
         sys.exit(1)

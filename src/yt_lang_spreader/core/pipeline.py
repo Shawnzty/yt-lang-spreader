@@ -10,8 +10,12 @@ from .config import PipelineConfig
 from .models import Segment
 from .requirements import ensure_runtime_requirements
 from .run_dir import (
+    STEP_NAMES,
+    TOTAL_STEPS,
     create_run_dir,
+    detect_last_completed_step,
     dicts_to_segments,
+    find_debug_runs,
     load_step_json,
     save_step_json,
     segments_to_dicts,
@@ -28,65 +32,12 @@ from ..processors.translator import translate_segments
 from ..utils.formatting import format_timestamp
 
 
-def run_pipeline(config: PipelineConfig) -> str:
-    """Run the full processing pipeline.
+# ======================================================================
+# Individual step functions
+# ======================================================================
 
-    Each step saves its output to a structured folder:
-      {run_dir}/step1_download/
-      {run_dir}/step2_segmentation/
-      ...
-
-    In debug mode the folder is named debug_YYYYMMDD_NNN instead of
-    output_YYYYMMDD_NNN.  Intermediate JSON files can be edited between
-    runs to override any step's output.
-
-    Returns:
-        Path to the output video file.
-    """
-    config.resolve_api_keys()
-    ensure_runtime_requirements(config)
-
-    run = create_run_dir(config.output_dir, debug=config.debug)
-    mode_label = "DEBUG" if config.debug else "OUTPUT"
-    print(f"\n{'=' * 50}")
-    print(f"  {mode_label} RUN: {run}")
-    print(f"{'=' * 50}")
-
-    # Print models in use
-    print("\n=== Models in use ===")
-    print(f"  Text model       : {config.text_model}")
-    print(f"                     (segmentation, summarization, translation, slides, vision)")
-    print(f"  Speech model     : {config.speech_model}")
-    print(f"                     (OpenAI TTS narration)")
-    print(f"  Transcript model : {config.transcript_model}")
-    print(f"                     (audio transcription fallback)")
-    if config.tts_backend == "elevenlabs":
-        print(f"  ElevenLabs model : {config.elevenlabs_model}")
-        print(f"                     (voice cloning narration)")
-    print("=====================")
-
-    # Save config for reproducibility
-    save_step_json(run, 0, "config.json", {
-        "url": config.url,
-        "source_lang": config.source_lang,
-        "target_lang": config.target_lang,
-        "target_length_minutes": config.target_length_minutes,
-        "text_model": config.text_model,
-        "speech_model": config.speech_model,
-        "transcript_model": config.transcript_model,
-        "tts_backend": config.tts_backend,
-        "stock_api": config.stock_api,
-        "debug": config.debug,
-    })
-    # Rename step0 dir to something clearer
-    s0 = step_dir(run, 0)
-    config_dir = os.path.join(run, "step0_config")
-    if os.path.exists(s0) and not os.path.exists(config_dir):
-        os.rename(s0, config_dir)
-
-    # ------------------------------------------------------------------
-    # Step 1: Download video and extract subtitles
-    # ------------------------------------------------------------------
+def _step1_download(run: str, config: PipelineConfig) -> None:
+    """Step 1: Download video and extract subtitles."""
     s1 = step_dir(run, 1)
     print("\n[1/9] Downloading video and extracting subtitles...")
     video_info = get_video_info(
@@ -102,7 +53,6 @@ def run_pipeline(config: PipelineConfig) -> str:
     print(f"      Transcript language: {video_info.transcript_language}")
     print(f"      Subtitle segments: {len(video_info.subtitles)}")
 
-    # Save step 1 output
     save_step_json(run, 1, "video_info.json", {
         "video_id": video_info.video_id,
         "title": video_info.title,
@@ -114,13 +64,12 @@ def run_pipeline(config: PipelineConfig) -> str:
     })
     print(f"      Saved: {s1}")
 
-    # ------------------------------------------------------------------
-    # Step 2: Semantic segmentation
-    # ------------------------------------------------------------------
+
+def _step2_segmentation(run: str, config: PipelineConfig) -> None:
+    """Step 2: Semantic segmentation."""
     s2 = step_dir(run, 2)
     print("\n[2/9] Segmenting transcript by topic (semantic)...")
 
-    # Load step 1 output (allows user edits to subtitles)
     vi_data = load_step_json(run, 1, "video_info.json")
 
     segments = segment_subtitles(
@@ -147,13 +96,13 @@ def run_pipeline(config: PipelineConfig) -> str:
     save_step_json(run, 2, "segments.json", segments_to_dicts(segments))
     print(f"      Saved: {s2}")
 
-    # ------------------------------------------------------------------
-    # Step 3: Summarize each segment
-    # ------------------------------------------------------------------
+
+def _step3_summarization(run: str, config: PipelineConfig) -> None:
+    """Step 3: Summarize each segment."""
     s3 = step_dir(run, 3)
 
-    # Load step 2 output (allows user edits to segments)
     segments = dicts_to_segments(load_step_json(run, 2, "segments.json"))
+    vi_data = load_step_json(run, 1, "video_info.json")
 
     if config.target_length_minutes is not None:
         video_duration_min = vi_data["duration"] / 60.0
@@ -185,13 +134,12 @@ def run_pipeline(config: PipelineConfig) -> str:
     save_step_json(run, 3, "segments.json", segments_to_dicts(segments))
     print(f"      Saved: {s3}")
 
-    # ------------------------------------------------------------------
-    # Step 4: Translate summaries
-    # ------------------------------------------------------------------
+
+def _step4_translation(run: str, config: PipelineConfig) -> None:
+    """Step 4: Translate summaries."""
     s4 = step_dir(run, 4)
     print(f"\n[4/9] Translating to {config.target_lang}...")
 
-    # Load step 3 output (allows user edits to summaries)
     segments = dicts_to_segments(load_step_json(run, 3, "segments.json"))
 
     segments = translate_segments(
@@ -208,16 +156,15 @@ def run_pipeline(config: PipelineConfig) -> str:
     save_step_json(run, 4, "segments.json", segments_to_dicts(segments))
     print(f"      Saved: {s4}")
 
-    # ------------------------------------------------------------------
-    # Step 5: Generate narration audio
-    # ------------------------------------------------------------------
+
+def _step5_narration(run: str, config: PipelineConfig) -> None:
+    """Step 5: Generate narration audio."""
     s5 = step_dir(run, 5)
     print(
         f"\n[5/9] Generating narration audio "
         f"(backend: {config.tts_backend})..."
     )
 
-    # Load step 4 output (allows user edits to translations)
     segments = dicts_to_segments(load_step_json(run, 4, "segments.json"))
 
     segments = generate_narration(segments, config, s5)
@@ -227,20 +174,20 @@ def run_pipeline(config: PipelineConfig) -> str:
     save_step_json(run, 5, "segments.json", segments_to_dicts(segments))
     print(f"      Saved: {s5}")
 
-    # ------------------------------------------------------------------
-    # Step 6: Extract key frames from original video
-    # ------------------------------------------------------------------
+
+def _step6_keyframes(run: str, config: PipelineConfig) -> None:
+    """Step 6: Extract key frames from original video."""
     s6 = step_dir(run, 6)
     print(
         f"\n[6/9] Extracting key frames "
         f"({config.frames_per_segment} per segment)..."
     )
 
-    # Load step 5 output
     segments = dicts_to_segments(load_step_json(run, 5, "segments.json"))
+    vi_data = load_step_json(run, 1, "video_info.json")
 
     segments = extract_key_frames(
-        video_info.video_path, segments, s6, config.frames_per_segment
+        vi_data["video_path"], segments, s6, config.frames_per_segment
     )
     total_frames = sum(len(seg.frame_paths) for seg in segments)
     print(f"      Extracted {total_frames} frames")
@@ -248,13 +195,12 @@ def run_pipeline(config: PipelineConfig) -> str:
     save_step_json(run, 6, "segments.json", segments_to_dicts(segments))
     print(f"      Saved: {s6}")
 
-    # ------------------------------------------------------------------
-    # Step 7: Generate visuals per segment type
-    # ------------------------------------------------------------------
+
+def _step7_visuals(run: str, config: PipelineConfig) -> None:
+    """Step 7: Generate visuals per segment type."""
     s7 = step_dir(run, 7)
     print("\n[7/9] Generating visuals by segment type...")
 
-    # Load step 6 output (allows user edits to frame_paths)
     segments = dicts_to_segments(load_step_json(run, 6, "segments.json"))
 
     slides_dir = os.path.join(s7, "slides")
@@ -286,15 +232,15 @@ def run_pipeline(config: PipelineConfig) -> str:
     save_step_json(run, 7, "segments.json", segments_to_dicts(segments))
     print(f"      Saved: {s7}")
 
-    # ------------------------------------------------------------------
-    # Step 8: Generate subtitle files for YouTube CC
-    # ------------------------------------------------------------------
+
+def _step8_subtitles(run: str, config: PipelineConfig) -> None:
+    """Step 8: Generate subtitle files for YouTube CC."""
     s8 = step_dir(run, 8)
 
-    # Load step 7 output
     segments = dicts_to_segments(load_step_json(run, 7, "segments.json"))
-
+    vi_data = load_step_json(run, 1, "video_info.json")
     safe_title = _safe_filename(vi_data["title"])
+
     if config.generate_subtitles:
         print("\n[8/9] Generating subtitle files (SRT/VTT)...")
         sub_base = f"{safe_title}_{config.target_lang}"
@@ -312,13 +258,14 @@ def run_pipeline(config: PipelineConfig) -> str:
     save_step_json(run, 8, "segments.json", segments_to_dicts(segments))
     print(f"      Saved: {s8}")
 
-    # ------------------------------------------------------------------
-    # Step 9: Assemble final video
-    # ------------------------------------------------------------------
+
+def _step9_video(run: str, config: PipelineConfig) -> str:
+    """Step 9: Assemble final video. Returns output path."""
     s9 = step_dir(run, 9)
 
-    # Load step 8 output (allows user edits to slide/chart/audio paths)
     segments = dicts_to_segments(load_step_json(run, 8, "segments.json"))
+    vi_data = load_step_json(run, 1, "video_info.json")
+    safe_title = _safe_filename(vi_data["title"])
 
     output_filename = f"{safe_title}_{config.target_lang}.mp4"
     output_path = os.path.join(s9, output_filename)
@@ -333,15 +280,219 @@ def run_pipeline(config: PipelineConfig) -> str:
     )
     print(f"      Output: {output_path}")
 
-    # Save final metadata
     _save_metadata(config, vi_data, segments, s9, output_filename)
+    return output_path
+
+
+# Step dispatch table
+_STEP_FUNCS = {
+    1: _step1_download,
+    2: _step2_segmentation,
+    3: _step3_summarization,
+    4: _step4_translation,
+    5: _step5_narration,
+    6: _step6_keyframes,
+    7: _step7_visuals,
+    8: _step8_subtitles,
+    9: _step9_video,
+}
+
+
+# ======================================================================
+# Pipeline entry points
+# ======================================================================
+
+def _print_models(config: PipelineConfig) -> None:
+    print("\n=== Models in use ===")
+    print(f"  Text model       : {config.text_model}")
+    print(f"                     (segmentation, summarization, translation, slides, vision)")
+    print(f"  Speech model     : {config.speech_model}")
+    print(f"                     (OpenAI TTS narration)")
+    print(f"  Transcript model : {config.transcript_model}")
+    print(f"                     (audio transcription fallback)")
+    if config.tts_backend == "elevenlabs":
+        print(f"  ElevenLabs model : {config.elevenlabs_model}")
+        print(f"                     (voice cloning narration)")
+    print("=====================")
+
+
+def _save_config_snapshot(run: str, config: PipelineConfig) -> None:
+    save_step_json(run, 0, "config.json", {
+        "url": config.url,
+        "source_lang": config.source_lang,
+        "target_lang": config.target_lang,
+        "target_length_minutes": config.target_length_minutes,
+        "text_model": config.text_model,
+        "speech_model": config.speech_model,
+        "transcript_model": config.transcript_model,
+        "tts_backend": config.tts_backend,
+        "stock_api": config.stock_api,
+        "debug": config.debug,
+    })
+    s0 = step_dir(run, 0)
+    config_dir = os.path.join(run, "step0_config")
+    if os.path.exists(s0) and not os.path.exists(config_dir):
+        os.rename(s0, config_dir)
+
+
+def run_pipeline(config: PipelineConfig) -> str:
+    """Run the full pipeline from step 1 through step 9.
+
+    Creates a new timestamped run directory.
+    Returns path to the output video file.
+    """
+    config.resolve_api_keys()
+    ensure_runtime_requirements(config)
+
+    run = create_run_dir(config.output_dir, debug=config.debug)
+    mode_label = "DEBUG" if config.debug else "OUTPUT"
+    print(f"\n{'=' * 50}")
+    print(f"  {mode_label} RUN: {run}")
+    print(f"{'=' * 50}")
+
+    _print_models(config)
+    _save_config_snapshot(run, config)
+
+    # Execute all steps
+    _run_steps(run, config, from_step=1, to_step=TOTAL_STEPS)
 
     print(f"\n{'=' * 50}")
     print(f"  Run complete: {run}")
-    print(f"  Video: {output_path}")
     print(f"{'=' * 50}")
-    return output_path
+    return run
 
+
+def resume_pipeline(config: PipelineConfig) -> str:
+    """Resume a previous debug run interactively.
+
+    1. Lists existing debug folders, lets user pick one (or auto-selects
+       if there's only one).
+    2. Detects the last completed step.
+    3. Asks: run next step only, or complete all remaining steps.
+    4. After each single step, asks again.
+
+    Returns the run directory path.
+    """
+    config.resolve_api_keys()
+    ensure_runtime_requirements(config)
+
+    # --- Find debug runs ---
+    runs = find_debug_runs(config.output_dir)
+    if not runs:
+        print(f"\nNo debug runs found in '{config.output_dir}/'.")
+        print("Start a new debug run with: yt-lang-spreader debug <URL>")
+        return ""
+
+    # --- Select run ---
+    if len(runs) == 1:
+        selected = runs[0]
+        print(f"\nFound 1 debug run: {selected['name']}")
+    else:
+        print(f"\nFound {len(runs)} debug runs:\n")
+        for i, r in enumerate(runs, 1):
+            last = r["last_step"]
+            step_label = (
+                f"step {last}/{TOTAL_STEPS} ({STEP_NAMES[last]})"
+                if last > 0 else "no steps completed"
+            )
+            print(f"  [{i}] {r['name']}  — {step_label}")
+        print()
+
+        while True:
+            choice = input("Select run to resume (number): ").strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(runs):
+                selected = runs[int(choice) - 1]
+                break
+            print(f"  Please enter a number between 1 and {len(runs)}.")
+
+    run = selected["path"]
+    last_step = selected["last_step"]
+
+    print(f"\n{'=' * 50}")
+    print(f"  RESUMING DEBUG RUN: {selected['name']}")
+    print(f"  Last completed step: {last_step}/{TOTAL_STEPS}", end="")
+    if last_step > 0:
+        print(f" ({STEP_NAMES[last_step]})")
+    else:
+        print()
+    print(f"{'=' * 50}")
+
+    if last_step >= TOTAL_STEPS:
+        print("\nAll steps are already complete. Nothing to resume.")
+        return run
+
+    # --- Load config from the run if URL not provided ---
+    config_path = os.path.join(run, "step0_config", "config.json")
+    if os.path.isfile(config_path):
+        import json as _json
+        with open(config_path, "r", encoding="utf-8") as f:
+            saved_cfg = _json.load(f)
+        if not config.url and saved_cfg.get("url"):
+            config.url = saved_cfg["url"]
+        if config.target_lang == "zh" and saved_cfg.get("target_lang"):
+            config.target_lang = saved_cfg["target_lang"]
+        if config.target_length_minutes is None and saved_cfg.get("target_length_minutes") is not None:
+            config.target_length_minutes = saved_cfg["target_length_minutes"]
+
+    _print_models(config)
+
+    # --- Interactive step execution ---
+    next_step = last_step + 1
+    while next_step <= TOTAL_STEPS:
+        remaining = TOTAL_STEPS - next_step + 1
+        next_name = STEP_NAMES[next_step]
+
+        print(f"\nNext: step {next_step}/{TOTAL_STEPS} ({next_name})")
+        print(f"Remaining steps: {remaining}")
+        print()
+        print(f"  [1] Run next step only (step {next_step}: {next_name})")
+        print(f"  [2] Complete all remaining steps ({next_step}-{TOTAL_STEPS})")
+        print(f"  [3] Quit")
+        print()
+
+        while True:
+            choice = input("Choice: ").strip()
+            if choice in ("1", "2", "3"):
+                break
+            print("  Please enter 1, 2, or 3.")
+
+        if choice == "3":
+            print(f"\nPaused at step {next_step}. Resume later with: yt-lang-spreader debug")
+            return run
+
+        if choice == "2":
+            # Run all remaining
+            _run_steps(run, config, from_step=next_step, to_step=TOTAL_STEPS)
+            print(f"\n{'=' * 50}")
+            print(f"  Run complete: {run}")
+            print(f"{'=' * 50}")
+            return run
+
+        # choice == "1": run single step
+        _run_steps(run, config, from_step=next_step, to_step=next_step)
+        next_step += 1
+
+    print(f"\n{'=' * 50}")
+    print(f"  Run complete: {run}")
+    print(f"{'=' * 50}")
+    return run
+
+
+def _run_steps(
+    run: str,
+    config: PipelineConfig,
+    from_step: int,
+    to_step: int,
+) -> None:
+    """Execute pipeline steps in the given range [from_step, to_step]."""
+    for step_num in range(from_step, to_step + 1):
+        func = _STEP_FUNCS[step_num]
+        func(run, config)
+
+
+# ======================================================================
+# Helpers
+# ======================================================================
 
 def _safe_filename(title: str) -> str:
     return "".join(
