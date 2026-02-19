@@ -1,4 +1,4 @@
-# Core dependencies
+# Mandatory dependencies (checked on every run)
 yt-dlp>=2024.1.0
 openai>=1.0.0
 gtts>=2.5.0
@@ -6,15 +6,7 @@ moviepy>=1.0.3,<2.0.0
 Pillow>=10.0.0
 matplotlib>=3.7.0
 requests>=2.28.0
-
-# Optional: Longport API for stock data (default)
-# longport>=1.0.0
-
-# Optional: yfinance for stock data (fallback)
-# yfinance>=0.2.0
-# numpy>=1.24.0
-
-# Optional: ElevenLabs voice cloning (requests already included above)
-
-# Optional: GUI
-# gradio>=4.0.0
+longport>=1.0.0
+yfinance>=0.2.0
+numpy>=1.24.0
+gradio>=4.0.0

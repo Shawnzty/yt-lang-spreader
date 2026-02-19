@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import re
+import sys
 from datetime import datetime, timedelta
 
 import matplotlib
@@ -24,6 +25,7 @@ import matplotlib.pyplot as plt
 
 from ..core.config import PipelineConfig
 from ..core.models import Segment
+from ..utils.openai_compat import chat_completion_params
 
 
 def generate_stock_charts(
@@ -61,8 +63,12 @@ def generate_stock_charts(
             try:
                 ohlcv = _fetch_ohlcv(ticker, period_days, config)
                 if not ohlcv:
-                    print(f"      No data for {ticker}, skipping chart")
-                    continue
+                    should_skip = _prompt_skip_missing_ticker(ticker)
+                    if should_skip:
+                        print(f"      No data for {ticker}, skipping chart")
+                        continue
+                    print("Software is terminated.")
+                    raise SystemExit(1)
                 _plot_candlestick(
                     ticker=ticker,
                     ohlcv=ohlcv,
@@ -128,10 +134,12 @@ def _refine_levels_from_frames(segment: Segment, config: PipelineConfig) -> None
 
     try:
         response = client.chat.completions.create(
-            model=config.text_model,
-            messages=messages,
-            max_tokens=200,
-            temperature=0,
+            **chat_completion_params(
+                model=config.text_model,
+                messages=messages,
+                max_tokens=200,
+                temperature=0,
+            )
         )
         raw = response.choices[0].message.content.strip()
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
@@ -240,8 +248,13 @@ def _fetch_yfinance(ticker: str, period_days: int) -> list[dict]:
             period = pstr
             break
 
-    data = yf.download(ticker, period=period, progress=False)
-    if data.empty:
+    data = None
+    for symbol in _yfinance_candidates(ticker):
+        data = yf.download(symbol, period=period, progress=False)
+        if not data.empty:
+            break
+
+    if data is None or data.empty:
         return []
 
     if hasattr(data.columns, "levels") and len(data.columns.levels) > 1:
@@ -258,6 +271,47 @@ def _fetch_yfinance(ticker: str, period_days: int) -> list[dict]:
             "volume": int(row["Volume"]),
         })
     return ohlcv
+
+
+def _yfinance_candidates(ticker: str) -> list[str]:
+    """Generate likely Yahoo symbols for a ticker/index alias."""
+    normalized = ticker.strip().upper().lstrip("$")
+    if not normalized:
+        return []
+
+    aliases = {
+        "VIX": "^VIX",
+        "SPX": "^GSPC",
+        "SP500": "^GSPC",
+        "DJI": "^DJI",
+        "DJIA": "^DJI",
+        "NASDAQ": "^IXIC",
+        "NDX": "^NDX",
+        "RUT": "^RUT",
+    }
+
+    mapped = aliases.get(normalized)
+    candidates = []
+    if mapped:
+        candidates.append(mapped)
+    if normalized not in candidates:
+        candidates.append(normalized)
+    return candidates
+
+
+def _prompt_skip_missing_ticker(ticker: str) -> bool:
+    """Ask user whether to skip a ticker when both providers return no data."""
+    prompt = (
+        f"No data found for ticker '{ticker}' from Longport and yfinance. "
+        "Skip this part and continue? [y/N]: "
+    )
+    if not sys.stdin or not sys.stdin.isatty():
+        return False
+    try:
+        answer = input(prompt).strip().lower()
+    except EOFError:
+        return False
+    return answer in {"y", "yes"}
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +391,7 @@ def _plot_candlestick(
     ax_vol.set_xticklabels(tick_labels, fontsize=8, rotation=45)
 
     # Styling
-    ax.set_title(f"{ticker} — Candlestick Chart", fontsize=14, fontweight="bold")
+    ax.set_title(ticker, fontsize=16, fontweight="bold", pad=10)
     ax.set_ylabel("Price ($)", fontsize=11)
     ax.legend(loc="upper left", fontsize=9)
     ax.grid(True, alpha=0.2)

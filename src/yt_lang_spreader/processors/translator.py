@@ -5,6 +5,7 @@ from __future__ import annotations
 from openai import OpenAI
 
 from ..core.models import Segment
+from ..utils.openai_compat import chat_completion_params
 
 LANGUAGE_NAMES = {
     "zh": "Simplified Chinese",
@@ -33,7 +34,7 @@ def translate_segments(
     segments: list[Segment],
     target_lang: str,
     api_key: str = "",
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-5-mini",
 ) -> list[Segment]:
     """Translate the summary of each segment to the target language."""
     lang_name = LANGUAGE_NAMES.get(target_lang, target_lang)
@@ -52,12 +53,14 @@ def translate_segments(
             continue
 
         response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": segment.summary},
-            ],
-            temperature=0.3,
+            **chat_completion_params(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": segment.summary},
+                ],
+                temperature=0.3,
+            )
         )
         segment.translated_summary = response.choices[0].message.content.strip()
 

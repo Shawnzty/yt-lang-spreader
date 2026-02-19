@@ -12,9 +12,11 @@ import os
 import re
 import textwrap
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from ..core.models import Segment
+from ..utils.fonts import get_font, is_cjk_language
+from ..utils.openai_compat import chat_completion_params
 
 
 # ---------------------------------------------------------------------------
@@ -24,7 +26,7 @@ from ..core.models import Segment
 def extract_bullet_points(
     segment: Segment,
     api_key: str,
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-5-mini",
 ) -> list[dict]:
     """Use GPT to extract structured bullet points from a macro segment.
 
@@ -49,9 +51,11 @@ def extract_bullet_points(
     )
 
     response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
+        **chat_completion_params(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
     )
 
     raw = response.choices[0].message.content.strip()
@@ -78,7 +82,8 @@ def generate_slides(
     segment: Segment,
     output_dir: str,
     api_key: str = "",
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-5-mini",
+    target_lang: str = "",
     size: tuple[int, int] = (1280, 720),
 ) -> list[str]:
     """Generate slide images for a macro segment.
@@ -108,6 +113,7 @@ def generate_slides(
             title=slide.get("title", segment.topic_label or "Market Overview"),
             bullets=slide.get("bullets", []),
             output_path=img_path,
+            target_lang=target_lang,
             size=size,
         )
         paths.append(img_path)
@@ -126,27 +132,11 @@ def _fallback_slides(segment: Segment) -> list[dict]:
     }]
 
 
-def _get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Try to load a suitable font."""
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    ]
-    for fp in candidates:
-        if os.path.exists(fp):
-            try:
-                return ImageFont.truetype(fp, size)
-            except (OSError, IOError):
-                continue
-    return ImageFont.load_default()
-
-
 def _render_slide(
     title: str,
     bullets: list[str],
     output_path: str,
+    target_lang: str = "",
     size: tuple[int, int] = (1280, 720),
 ) -> None:
     """Render a single slide image with a title and bullet points."""
@@ -158,7 +148,8 @@ def _render_slide(
     current_y = 60
 
     # --- Title ---
-    title_font = _get_font(36)
+    prefer_cjk = is_cjk_language(target_lang)
+    title_font = get_font(36, prefer_cjk=prefer_cjk, bold=True)
     # Draw accent line above title
     draw.rectangle(
         [margin_x, current_y, margin_x + 60, current_y + 4],
@@ -184,7 +175,7 @@ def _render_slide(
     current_y += 25
 
     # --- Bullet points ---
-    bullet_font = _get_font(24)
+    bullet_font = get_font(24, prefer_cjk=prefer_cjk)
     bullet_spacing = 12
 
     for bullet_text in bullets:

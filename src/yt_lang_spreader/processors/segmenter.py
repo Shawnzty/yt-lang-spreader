@@ -17,6 +17,7 @@ import re
 from openai import OpenAI
 
 from ..core.models import Segment
+from ..utils.openai_compat import chat_completion_params
 
 
 _SEGMENTATION_SYSTEM_PROMPT = """\
@@ -68,7 +69,7 @@ def segment_subtitles(
     num_segments: int | None = None,
     segment_duration: float = 120.0,
     api_key: str = "",
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-5-mini",
     video_title: str = "",
 ) -> list[Segment]:
     """Segment subtitles by semantic topic using GPT.
@@ -106,18 +107,20 @@ def _segment_semantic(
 
     client = OpenAI(api_key=api_key)
     response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": _SEGMENTATION_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": _SEGMENTATION_USER_TEMPLATE.format(
-                    title=video_title,
-                    transcript=transcript_text,
-                ),
-            },
-        ],
-        temperature=0.1,
+        **chat_completion_params(
+            model=model,
+            messages=[
+                {"role": "system", "content": _SEGMENTATION_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": _SEGMENTATION_USER_TEMPLATE.format(
+                        title=video_title,
+                        transcript=transcript_text,
+                    ),
+                },
+            ],
+            temperature=0.1,
+        )
     )
 
     raw = response.choices[0].message.content.strip()

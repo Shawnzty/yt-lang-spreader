@@ -9,6 +9,7 @@ import tempfile
 
 from .config import PipelineConfig
 from .models import Segment
+from .requirements import ensure_runtime_requirements
 from ..extractors.downloader import get_video_info
 from ..generators.narrator import generate_narration
 from ..generators.slides import generate_slides
@@ -40,6 +41,7 @@ def run_pipeline(config: PipelineConfig) -> str:
         Path to the output video file.
     """
     config.resolve_api_keys()
+    ensure_runtime_requirements(config)
     os.makedirs(config.output_dir, exist_ok=True)
     tmp_dir = tempfile.mkdtemp(prefix="yt_lang_spreader_")
 
@@ -175,6 +177,7 @@ def run_pipeline(config: PipelineConfig) -> str:
                     seg, slides_dir,
                     api_key=config.openai_api_key,
                     model=config.text_model,
+                    target_lang=config.target_lang,
                     size=config.video_size,
                 )
                 seg.slide_paths = paths
@@ -216,6 +219,7 @@ def run_pipeline(config: PipelineConfig) -> str:
             output_path,
             video_size=config.video_size,
             show_subtitles=config.show_subtitles,
+            target_lang=config.target_lang,
         )
         print(f"      Output: {output_path}")
 

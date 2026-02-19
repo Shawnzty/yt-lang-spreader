@@ -6,6 +6,7 @@ from openai import OpenAI
 
 from ..core.models import Segment
 from ..utils.formatting import format_time_short
+from ..utils.openai_compat import chat_completion_params
 
 
 def _build_compression_instruction(ratio: float) -> str:
@@ -57,7 +58,7 @@ def summarize_segments(
     video_title: str,
     compression_ratio: float = 1.0,
     api_key: str = "",
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-5-mini",
 ) -> list[Segment]:
     """Summarize each segment using OpenAI.
 
@@ -89,20 +90,22 @@ def summarize_segments(
             continue
 
         response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": (
-                        f"Segment {segment.index} "
-                        f"({format_time_short(segment.start)} - "
-                        f"{format_time_short(segment.end)}):\n\n"
-                        f"{segment.text}"
-                    ),
-                },
-            ],
-            temperature=0.3,
+            **chat_completion_params(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Segment {segment.index} "
+                            f"({format_time_short(segment.start)} - "
+                            f"{format_time_short(segment.end)}):\n\n"
+                            f"{segment.text}"
+                        ),
+                    },
+                ],
+                temperature=0.3,
+            )
         )
         segment.summary = response.choices[0].message.content.strip()
 

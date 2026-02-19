@@ -27,17 +27,19 @@ YouTube URL
 ## Installation
 
 ```bash
-# Core install
+# Install all mandatory dependencies
 pip install -e .
+```
 
-# With stock chart support
-pip install -e ".[stock]"
+## Python Dependency List
 
-# With GUI
-pip install -e ".[gui]"
+Checked on every run:
+- Mandatory: `yt-dlp`, `openai`, `gtts`, `moviepy`, `Pillow`, `matplotlib`, `requests`, `longport`, `yfinance`, `numpy`, `gradio`
+- If any are missing, CLI prints missing packages + estimated download size, then prompts: `Install missing libraries now? [y/N]`
 
-# Everything
-pip install -e ".[all]"
+Install quickly:
+```bash
+pip install -r requirements.txt
 ```
 
 ## Quick Start
@@ -98,8 +100,6 @@ yt-lang-spreader https://youtu.be/VIDEO_ID --lang es \
 For finance/quant analysis videos, enable automatic stock chart generation:
 
 ```bash
-pip install -e ".[stock]"
-
 yt-lang-spreader https://youtu.be/VIDEO_ID --lang zh --stock-charts
 ```
 
@@ -146,7 +146,7 @@ yt-lang-spreader https://youtu.be/VIDEO_ID --lang zh --no-subtitle-files
 | `--stock-charts` | Enable stock chart generation for finance videos |
 | **OpenAI** | |
 | `--api-key` | OpenAI API key (or OPENAI_API_KEY env) |
-| `--model` | OpenAI model (default: gpt-4o-mini) |
+| `--model` | OpenAI model (default: gpt-5-mini) |
 | **Output** | |
 | `--output, -o` | Output directory (default: output) |
 | `--keep-temp` | Keep temporary files after processing |
@@ -203,7 +203,6 @@ src/yt_lang_spreader/
 A Gradio-based web UI scaffold is included. To try it:
 
 ```bash
-pip install -e ".[gui]"
 python -m yt_lang_spreader.gui.app
 ```
 

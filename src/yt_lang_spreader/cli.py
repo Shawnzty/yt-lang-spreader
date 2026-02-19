@@ -169,8 +169,8 @@ def main() -> None:
     # --- Models ---
     mdl = parser.add_argument_group("models")
     mdl.add_argument(
-        "--textmodel", default="gpt-4o-mini",
-        help="Text model for segmentation, summarization, translation, slides, vision (default: gpt-4o-mini)",
+        "--textmodel", default="gpt-5-mini",
+        help="Text model for segmentation, summarization, translation, slides, vision (default: gpt-5-mini)",
     )
     mdl.add_argument(
         "--speechmodel", default="tts-1-hd",

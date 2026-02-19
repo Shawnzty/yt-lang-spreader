@@ -18,9 +18,10 @@ from moviepy.editor import (
     ImageClip,
     concatenate_videoclips,
 )
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from ..core.models import Segment
+from ..utils.fonts import get_font, is_cjk_language
 from ..utils.formatting import wrap_text
 
 # Pillow>=10 removed Image.ANTIALIAS, but moviepy 1.x still references it.
@@ -93,6 +94,7 @@ def create_video(
     output_path: str,
     video_size: tuple[int, int] = (1280, 720),
     show_subtitles: bool = True,
+    target_lang: str = "",
 ) -> str:
     """Assemble the final video from segment data.
 
@@ -103,6 +105,7 @@ def create_video(
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     clips = []
     w, h = video_size
+    prefer_cjk = is_cjk_language(target_lang)
 
     for segment in segments:
         if not segment.audio_path:
@@ -115,7 +118,12 @@ def create_video(
         all_images = _select_images_for_segment(segment)
 
         if not all_images:
-            clip = _create_text_only_clip(text, seg_duration, video_size)
+            clip = _create_text_only_clip(
+                text,
+                seg_duration,
+                video_size,
+                prefer_cjk=prefer_cjk,
+            )
             clip = clip.set_audio(audio_clip)
             clips.append(clip)
             continue
@@ -134,7 +142,12 @@ def create_video(
         slideshow = concatenate_videoclips(frame_clips, method="compose")
 
         if show_subtitles and text:
-            subtitle_clip = _create_subtitle_clip(text, seg_duration, video_size)
+            subtitle_clip = _create_subtitle_clip(
+                text,
+                seg_duration,
+                video_size,
+                prefer_cjk=prefer_cjk,
+            )
             final_clip = CompositeVideoClip(
                 [slideshow, subtitle_clip.set_position(("center", h - 100))]
             )
@@ -166,28 +179,18 @@ def create_video(
 # Image clip helpers
 # ---------------------------------------------------------------------------
 
-def _get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    ]
-    for fp in font_paths:
-        if os.path.exists(fp):
-            try:
-                return ImageFont.truetype(fp, size)
-            except (OSError, IOError):
-                continue
-    return ImageFont.load_default()
-
 
 def _create_text_only_clip(
-    text: str, duration: float, size: tuple[int, int]
+    text: str,
+    duration: float,
+    size: tuple[int, int],
+    *,
+    prefer_cjk: bool = False,
 ) -> ImageClip:
     w, h = size
     img = Image.new("RGB", (w, h), color=(20, 20, 30))
     draw = ImageDraw.Draw(img)
-    font = _get_font(28)
+    font = get_font(28, prefer_cjk=prefer_cjk)
     wrapped = wrap_text(text, max_chars=60)
 
     bbox = draw.multiline_textbbox((0, 0), wrapped, font=font)
@@ -204,13 +207,17 @@ def _create_text_only_clip(
 
 
 def _create_subtitle_clip(
-    text: str, duration: float, size: tuple[int, int]
+    text: str,
+    duration: float,
+    size: tuple[int, int],
+    *,
+    prefer_cjk: bool = False,
 ) -> ImageClip:
     w, _ = size
     sub_h = 80
     img = Image.new("RGBA", (w, sub_h), color=(0, 0, 0, 160))
     draw = ImageDraw.Draw(img)
-    font = _get_font(20)
+    font = get_font(20, prefer_cjk=prefer_cjk)
 
     display_text = text[:200] + "..." if len(text) > 200 else text
     wrapped = wrap_text(display_text, max_chars=80)

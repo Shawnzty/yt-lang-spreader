@@ -56,7 +56,7 @@ class PipelineConfig:
     openai_api_key: str = ""
 
     # --- Models ---
-    text_model: str = "gpt-4o-mini"        # segmentation, summarization, translation, slides, vision
+    text_model: str = "gpt-5-mini"        # segmentation, summarization, translation, slides, vision
     speech_model: str = "tts-1-hd"         # OpenAI TTS narration
     transcript_model: str = "whisper-1"    # audio transcription fallback
 
