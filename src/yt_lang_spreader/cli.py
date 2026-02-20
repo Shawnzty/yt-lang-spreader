@@ -26,6 +26,35 @@ def _parse_length(value: str) -> float:
     return float(m.group(1))
 
 
+def _prompt_target_language() -> str:
+    while True:
+        value = input("Target language code (e.g. ja): ").strip()
+        if value:
+            return value
+        print("  Please enter a language code.")
+
+
+def _prompt_target_length() -> float | None:
+    while True:
+        value = input(
+            "Target output length (e.g. 10min, press Enter for original length): "
+        ).strip()
+        if not value:
+            return None
+        try:
+            return _parse_length(value)
+        except argparse.ArgumentTypeError as e:
+            print(f"  {e}")
+
+
+def _resolve_interactive_run_options(args: argparse.Namespace) -> None:
+    """Prompt for missing run options."""
+    if not args.lang:
+        args.lang = _prompt_target_language()
+    if args.length is None:
+        args.length = _prompt_target_length()
+
+
 def _add_common_args(parser: argparse.ArgumentParser, url_required: bool = True) -> None:
     """Add all shared arguments to a parser (used by both run and debug)."""
 
@@ -38,8 +67,11 @@ def _add_common_args(parser: argparse.ArgumentParser, url_required: bool = True)
     # --- Language ---
     lang = parser.add_argument_group("language")
     lang.add_argument(
-        "--lang", "-l", default="zh",
-        help="Target language code (default: zh). e.g. zh, es, fr, de, ja, ko, pt, ru",
+        "--lang", "-l", default=None,
+        help=(
+            "Target language code. e.g. zh, es, fr, de, ja, ko, pt, ru. "
+            "If omitted for a new run, you'll be prompted interactively."
+        ),
     )
     lang.add_argument(
         "--source-lang", default="auto",
@@ -168,7 +200,7 @@ def _build_config(args: argparse.Namespace, debug: bool = False) -> PipelineConf
     return PipelineConfig(
         url=getattr(args, "url", "") or "",
         source_lang=args.source_lang,
-        target_lang=args.lang,
+        target_lang=args.lang or "",
         target_length_minutes=args.length,
         num_segments=args.segments,
         segment_duration=args.segment_duration,
@@ -252,15 +284,18 @@ def main() -> None:
 
     try:
         if args.command == "run":
+            _resolve_interactive_run_options(args)
             config = _build_config(args, debug=False)
             run_pipeline(config)
 
         elif args.command == "debug":
-            config = _build_config(args, debug=True)
-            if config.url:
+            if args.url:
+                _resolve_interactive_run_options(args)
+                config = _build_config(args, debug=True)
                 # New debug run with URL — run full pipeline
                 run_pipeline(config)
             else:
+                config = _build_config(args, debug=True)
                 # No URL — resume a previous debug run interactively
                 resume_pipeline(config)
 

@@ -5,6 +5,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
+import time
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from datetime import datetime
+from typing import TextIO
 
 from .config import PipelineConfig
 from .models import Segment
@@ -13,7 +18,6 @@ from .run_dir import (
     STEP_NAMES,
     TOTAL_STEPS,
     create_run_dir,
-    detect_last_completed_step,
     dicts_to_segments,
     find_debug_runs,
     load_step_json,
@@ -30,6 +34,35 @@ from ..processors.segmenter import segment_subtitles
 from ..processors.summarizer import summarize_segments
 from ..processors.translator import translate_segments
 from ..utils.formatting import format_timestamp
+
+
+_STEP_TIMINGS_FILE = "step_timings.json"
+_TERMINAL_OUTPUT_FILE = "terminal_output.log"
+_RUN_REPORT_FILE = "run_report.txt"
+
+
+class _TeeStream:
+    """Write to terminal and file at the same time."""
+
+    def __init__(self, terminal: TextIO, file_stream: TextIO) -> None:
+        self._terminal = terminal
+        self._file_stream = file_stream
+
+    def write(self, data: str) -> int:
+        self._terminal.write(data)
+        self._file_stream.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        self._terminal.flush()
+        self._file_stream.flush()
+
+    def isatty(self) -> bool:
+        return bool(getattr(self._terminal, "isatty", lambda: False)())
+
+    @property
+    def encoding(self) -> str:
+        return getattr(self._terminal, "encoding", "utf-8")
 
 
 # ======================================================================
@@ -316,23 +349,167 @@ def _print_models(config: PipelineConfig) -> None:
     print("=====================")
 
 
-def _save_config_snapshot(run: str, config: PipelineConfig) -> None:
-    save_step_json(run, 0, "config.json", {
-        "url": config.url,
-        "source_lang": config.source_lang,
-        "target_lang": config.target_lang,
-        "target_length_minutes": config.target_length_minutes,
-        "text_model": config.text_model,
-        "speech_model": config.speech_model,
-        "transcript_model": config.transcript_model,
-        "tts_backend": config.tts_backend,
-        "stock_api": config.stock_api,
-        "debug": config.debug,
-    })
-    s0 = step_dir(run, 0)
+def _step0_config_dir(run: str) -> str:
     config_dir = os.path.join(run, "step0_config")
-    if os.path.exists(s0) and not os.path.exists(config_dir):
-        os.rename(s0, config_dir)
+    legacy_dir = os.path.join(run, "step0_step0")
+    if os.path.isdir(legacy_dir):
+        os.makedirs(config_dir, exist_ok=True)
+        for name in os.listdir(legacy_dir):
+            src = os.path.join(legacy_dir, name)
+            dst = os.path.join(config_dir, name)
+            if not os.path.exists(dst):
+                shutil.move(src, dst)
+        if not os.listdir(legacy_dir):
+            os.rmdir(legacy_dir)
+    os.makedirs(config_dir, exist_ok=True)
+    return config_dir
+
+
+def _format_target_length(target_length_minutes: float | None) -> str:
+    if target_length_minutes is None:
+        return "original length"
+    if float(target_length_minutes).is_integer():
+        return f"{int(target_length_minutes)}min"
+    return f"{target_length_minutes:.1f}min"
+
+
+def _print_requested_output(config: PipelineConfig) -> None:
+    print("\n=== Requested output ===")
+    print(f"  Target language : {config.target_lang}")
+    print(f"  Output length   : {_format_target_length(config.target_length_minutes)}")
+    print("========================")
+
+
+def _prompt_target_language() -> str:
+    while True:
+        value = input("Target language code (e.g. ja): ").strip()
+        if value:
+            return value
+        print("  Please enter a language code.")
+
+
+def _save_config_snapshot(run: str, config: PipelineConfig) -> None:
+    config_path = os.path.join(_step0_config_dir(run), "config.json")
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "url": config.url,
+            "source_lang": config.source_lang,
+            "target_lang": config.target_lang,
+            "target_length_minutes": config.target_length_minutes,
+            "text_model": config.text_model,
+            "speech_model": config.speech_model,
+            "transcript_model": config.transcript_model,
+            "tts_backend": config.tts_backend,
+            "stock_api": config.stock_api,
+            "debug": config.debug,
+        }, f, ensure_ascii=False, indent=2)
+
+
+def _load_step_timings(run: str) -> dict[int, float]:
+    path = os.path.join(_step0_config_dir(run), _STEP_TIMINGS_FILE)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    steps: dict[int, float] = {}
+    for item in raw.get("steps", []):
+        try:
+            step_num = int(item["step"])
+            seconds = float(item["seconds"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if step_num in STEP_NAMES:
+            steps[step_num] = seconds
+    return steps
+
+
+def _save_step_timings(run: str, step_timings: dict[int, float]) -> str:
+    path = os.path.join(_step0_config_dir(run), _STEP_TIMINGS_FILE)
+    payload = {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "total_seconds": round(sum(step_timings.values()), 3),
+        "steps": [
+            {
+                "step": step_num,
+                "name": STEP_NAMES[step_num],
+                "seconds": round(step_timings[step_num], 3),
+            }
+            for step_num in sorted(step_timings)
+            if step_num in STEP_NAMES
+        ],
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return path
+
+
+def _format_elapsed(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    minutes = int(seconds // 60)
+    remaining = seconds - (minutes * 60)
+    if minutes < 60:
+        return f"{minutes}m {remaining:04.1f}s"
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"{hours}h {mins:02d}m {remaining:04.1f}s"
+
+
+def _print_timing_summary(step_timings: dict[int, float]) -> None:
+    if not step_timings:
+        return
+    print("\n=== Step timings ===")
+    for step_num in sorted(step_timings):
+        if step_num not in STEP_NAMES:
+            continue
+        print(f"  Step {step_num} ({STEP_NAMES[step_num]}): {_format_elapsed(step_timings[step_num])}")
+    print(f"  Total measured : {_format_elapsed(sum(step_timings.values()))}")
+    print("====================")
+
+
+@contextmanager
+def _capture_terminal_output(run: str):
+    log_path = os.path.join(_step0_config_dir(run), _TERMINAL_OUTPUT_FILE)
+    with open(log_path, "a", encoding="utf-8") as log_file:
+        log_file.write(
+            f"\n===== Session {datetime.now().isoformat(timespec='seconds')} =====\n"
+        )
+        log_file.flush()
+        tee_stdout = _TeeStream(sys.stdout, log_file)
+        tee_stderr = _TeeStream(sys.stderr, log_file)
+        with redirect_stdout(tee_stdout), redirect_stderr(tee_stderr):
+            yield
+
+
+def _write_run_report(run: str, step_timings: dict[int, float]) -> str:
+    step0 = _step0_config_dir(run)
+    report_path = os.path.join(step0, _RUN_REPORT_FILE)
+    terminal_log_path = os.path.join(step0, _TERMINAL_OUTPUT_FILE)
+
+    terminal_output = ""
+    if os.path.isfile(terminal_log_path):
+        with open(terminal_log_path, "r", encoding="utf-8") as f:
+            terminal_output = f.read()
+
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("Step timings\n")
+        f.write("============\n")
+        for step_num in sorted(step_timings):
+            if step_num not in STEP_NAMES:
+                continue
+            f.write(
+                f"Step {step_num} ({STEP_NAMES[step_num]}): "
+                f"{_format_elapsed(step_timings[step_num])}\n"
+            )
+        f.write(f"Total measured: {_format_elapsed(sum(step_timings.values()))}\n\n")
+        f.write("Terminal output\n")
+        f.write("===============\n")
+        f.write(terminal_output)
+    return report_path
 
 
 def run_pipeline(config: PipelineConfig) -> str:
@@ -345,20 +522,35 @@ def run_pipeline(config: PipelineConfig) -> str:
     ensure_runtime_requirements(config)
 
     run = create_run_dir(config.output_dir, debug=config.debug)
-    mode_label = "DEBUG" if config.debug else "OUTPUT"
-    print(f"\n{'=' * 50}")
-    print(f"  {mode_label} RUN: {run}")
-    print(f"{'=' * 50}")
+    step_timings = _load_step_timings(run)
+    try:
+        with _capture_terminal_output(run):
+            mode_label = "DEBUG" if config.debug else "OUTPUT"
+            print(f"\n{'=' * 50}")
+            print(f"  {mode_label} RUN: {run}")
+            print(f"{'=' * 50}")
 
-    _print_models(config)
-    _save_config_snapshot(run, config)
+            _print_models(config)
+            _print_requested_output(config)
+            _save_config_snapshot(run, config)
 
-    # Execute all steps
-    _run_steps(run, config, from_step=1, to_step=TOTAL_STEPS)
+            # Execute all steps
+            _run_steps(
+                run,
+                config,
+                from_step=1,
+                to_step=TOTAL_STEPS,
+                step_timings=step_timings,
+            )
+            _print_timing_summary(step_timings)
 
-    print(f"\n{'=' * 50}")
-    print(f"  Run complete: {run}")
-    print(f"{'=' * 50}")
+            print(f"\n{'=' * 50}")
+            print(f"  Run complete: {run}")
+            print(f"{'=' * 50}")
+    finally:
+        _save_config_snapshot(run, config)
+        _save_step_timings(run, step_timings)
+        _write_run_report(run, step_timings)
     return run
 
 
@@ -407,74 +599,100 @@ def resume_pipeline(config: PipelineConfig) -> str:
 
     run = selected["path"]
     last_step = selected["last_step"]
+    step_timings = _load_step_timings(run)
+    try:
+        with _capture_terminal_output(run):
+            print(f"\n{'=' * 50}")
+            print(f"  RESUMING DEBUG RUN: {selected['name']}")
+            print(f"  Last completed step: {last_step}/{TOTAL_STEPS}", end="")
+            if last_step > 0:
+                print(f" ({STEP_NAMES[last_step]})")
+            else:
+                print()
+            print(f"{'=' * 50}")
 
-    print(f"\n{'=' * 50}")
-    print(f"  RESUMING DEBUG RUN: {selected['name']}")
-    print(f"  Last completed step: {last_step}/{TOTAL_STEPS}", end="")
-    if last_step > 0:
-        print(f" ({STEP_NAMES[last_step]})")
-    else:
-        print()
-    print(f"{'=' * 50}")
+            if last_step >= TOTAL_STEPS:
+                print("\nAll steps are already complete. Nothing to resume.")
+                _print_timing_summary(step_timings)
+                return run
 
-    if last_step >= TOTAL_STEPS:
-        print("\nAll steps are already complete. Nothing to resume.")
-        return run
+            # --- Load config from the run if URL not provided ---
+            config_path = os.path.join(run, "step0_config", "config.json")
+            if os.path.isfile(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    saved_cfg = json.load(f)
+                if not config.url and saved_cfg.get("url"):
+                    config.url = saved_cfg["url"]
+                if not config.target_lang and saved_cfg.get("target_lang"):
+                    config.target_lang = saved_cfg["target_lang"]
+                if config.target_length_minutes is None and saved_cfg.get("target_length_minutes") is not None:
+                    config.target_length_minutes = saved_cfg["target_length_minutes"]
 
-    # --- Load config from the run if URL not provided ---
-    config_path = os.path.join(run, "step0_config", "config.json")
-    if os.path.isfile(config_path):
-        import json as _json
-        with open(config_path, "r", encoding="utf-8") as f:
-            saved_cfg = _json.load(f)
-        if not config.url and saved_cfg.get("url"):
-            config.url = saved_cfg["url"]
-        if config.target_lang == "zh" and saved_cfg.get("target_lang"):
-            config.target_lang = saved_cfg["target_lang"]
-        if config.target_length_minutes is None and saved_cfg.get("target_length_minutes") is not None:
-            config.target_length_minutes = saved_cfg["target_length_minutes"]
+            if not config.target_lang:
+                config.target_lang = _prompt_target_language()
 
-    _print_models(config)
+            _print_models(config)
+            _print_requested_output(config)
+            _save_config_snapshot(run, config)
 
-    # --- Interactive step execution ---
-    next_step = last_step + 1
-    while next_step <= TOTAL_STEPS:
-        remaining = TOTAL_STEPS - next_step + 1
-        next_name = STEP_NAMES[next_step]
+            # --- Interactive step execution ---
+            next_step = last_step + 1
+            while next_step <= TOTAL_STEPS:
+                remaining = TOTAL_STEPS - next_step + 1
+                next_name = STEP_NAMES[next_step]
 
-        print(f"\nNext: step {next_step}/{TOTAL_STEPS} ({next_name})")
-        print(f"Remaining steps: {remaining}")
-        print()
-        print(f"  [1] Run next step only (step {next_step}: {next_name})")
-        print(f"  [2] Complete all remaining steps ({next_step}-{TOTAL_STEPS})")
-        print(f"  [3] Quit")
-        print()
+                print(f"\nNext: step {next_step}/{TOTAL_STEPS} ({next_name})")
+                print(f"Remaining steps: {remaining}")
+                print()
+                print(f"  [1] Run next step only (step {next_step}: {next_name})")
+                print(f"  [2] Complete all remaining steps ({next_step}-{TOTAL_STEPS})")
+                print(f"  [3] Quit")
+                print()
 
-        while True:
-            choice = input("Choice: ").strip()
-            if choice in ("1", "2", "3"):
-                break
-            print("  Please enter 1, 2, or 3.")
+                while True:
+                    choice = input("Choice: ").strip()
+                    if choice in ("1", "2", "3"):
+                        break
+                    print("  Please enter 1, 2, or 3.")
 
-        if choice == "3":
-            print(f"\nPaused at step {next_step}. Resume later with: yt-lang-spreader debug")
-            return run
+                if choice == "3":
+                    _print_timing_summary(step_timings)
+                    print(f"\nPaused at step {next_step}. Resume later with: yt-lang-spreader debug")
+                    return run
 
-        if choice == "2":
-            # Run all remaining
-            _run_steps(run, config, from_step=next_step, to_step=TOTAL_STEPS)
+                if choice == "2":
+                    # Run all remaining
+                    _run_steps(
+                        run,
+                        config,
+                        from_step=next_step,
+                        to_step=TOTAL_STEPS,
+                        step_timings=step_timings,
+                    )
+                    _print_timing_summary(step_timings)
+                    print(f"\n{'=' * 50}")
+                    print(f"  Run complete: {run}")
+                    print(f"{'=' * 50}")
+                    return run
+
+                # choice == "1": run single step
+                _run_steps(
+                    run,
+                    config,
+                    from_step=next_step,
+                    to_step=next_step,
+                    step_timings=step_timings,
+                )
+                _print_timing_summary(step_timings)
+                next_step += 1
+
             print(f"\n{'=' * 50}")
             print(f"  Run complete: {run}")
             print(f"{'=' * 50}")
-            return run
-
-        # choice == "1": run single step
-        _run_steps(run, config, from_step=next_step, to_step=next_step)
-        next_step += 1
-
-    print(f"\n{'=' * 50}")
-    print(f"  Run complete: {run}")
-    print(f"{'=' * 50}")
+    finally:
+        _save_config_snapshot(run, config)
+        _save_step_timings(run, step_timings)
+        _write_run_report(run, step_timings)
     return run
 
 
@@ -483,11 +701,26 @@ def _run_steps(
     config: PipelineConfig,
     from_step: int,
     to_step: int,
+    step_timings: dict[int, float] | None = None,
 ) -> None:
     """Execute pipeline steps in the given range [from_step, to_step]."""
+    if step_timings is None:
+        step_timings = {}
     for step_num in range(from_step, to_step + 1):
         func = _STEP_FUNCS[step_num]
-        func(run, config)
+        started = time.perf_counter()
+        failed = False
+        try:
+            func(run, config)
+        except Exception:
+            failed = True
+            raise
+        finally:
+            elapsed = time.perf_counter() - started
+            step_timings[step_num] = elapsed
+            status = " (failed)" if failed else ""
+            print(f"      Step runtime: {_format_elapsed(elapsed)}{status}")
+            _save_step_timings(run, step_timings)
 
 
 # ======================================================================
