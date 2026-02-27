@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw
 from ..core.models import Segment
 from ..utils.fonts import get_font, is_cjk_language
 from ..utils.openai_compat import chat_completion_params
+from ..utils.skills import load_skill_instructions
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +50,9 @@ def extract_bullet_points(
         "Return ONLY a JSON array of slide objects:\n"
         '[{"title": "...", "bullets": ["...", "..."]}, ...]'
     )
+    extra = load_skill_instructions(7)
+    if extra:
+        prompt += "\n\nAdditional instructions:\n" + extra
 
     response = client.chat.completions.create(
         **chat_completion_params(

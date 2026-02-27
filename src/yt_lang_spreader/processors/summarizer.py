@@ -7,6 +7,7 @@ from openai import OpenAI
 from ..core.models import Segment
 from ..utils.formatting import format_time_short
 from ..utils.openai_compat import chat_completion_params
+from ..utils.skills import load_skill_instructions
 
 
 def _build_compression_instruction(ratio: float) -> str:
@@ -83,6 +84,9 @@ def summarize_segments(
         f"Video title: {video_title}\n\n"
         f"Compression instruction: {compression_instruction}"
     )
+    extra = load_skill_instructions(3)
+    if extra:
+        system_prompt += "\n\nAdditional instructions:\n" + extra
 
     for segment in segments:
         if segment.text == "(No narration in this segment)":

@@ -18,6 +18,7 @@ from openai import OpenAI
 
 from ..core.models import Segment
 from ..utils.openai_compat import chat_completion_params
+from ..utils.skills import load_skill_instructions
 
 
 _SEGMENTATION_SYSTEM_PROMPT = """\
@@ -105,12 +106,17 @@ def _segment_semantic(
     if len(transcript_text) > 80_000:
         transcript_text = transcript_text[:80_000] + "\n[... truncated]"
 
+    system_prompt = _SEGMENTATION_SYSTEM_PROMPT
+    extra = load_skill_instructions(2)
+    if extra:
+        system_prompt += "\n\nAdditional instructions:\n" + extra
+
     client = OpenAI(api_key=api_key)
     response = client.chat.completions.create(
         **chat_completion_params(
             model=model,
             messages=[
-                {"role": "system", "content": _SEGMENTATION_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
                     "content": _SEGMENTATION_USER_TEMPLATE.format(

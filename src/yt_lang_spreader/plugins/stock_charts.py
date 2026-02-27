@@ -26,6 +26,7 @@ import matplotlib.pyplot as plt
 from ..core.config import PipelineConfig
 from ..core.models import Segment
 from ..utils.openai_compat import chat_completion_params
+from ..utils.skills import load_skill_instructions
 
 
 def generate_stock_charts(
@@ -121,6 +122,9 @@ def _refine_levels_from_frames(segment: Segment, config: PipelineConfig) -> None
         '{"support": [123.45, 130.0], "resistance": [150.0, 160.5]}. '
         "If you can't find any, return empty lists. No explanation."
     )
+    extra = load_skill_instructions(7)
+    if extra:
+        prompt += "\n\nAdditional instructions:\n" + extra
 
     messages = [
         {

@@ -6,6 +6,7 @@ from openai import OpenAI
 
 from ..core.models import Segment
 from ..utils.openai_compat import chat_completion_params
+from ..utils.skills import load_skill_instructions
 
 LANGUAGE_NAMES = {
     "zh": "Simplified Chinese",
@@ -46,6 +47,9 @@ def translate_segments(
         f"voice-over narration. Do not add any explanations or notes. "
         f"Only output the translated text."
     )
+    extra = load_skill_instructions(4)
+    if extra:
+        system_prompt += "\n\nAdditional instructions:\n" + extra
 
     for segment in segments:
         if not segment.summary:
